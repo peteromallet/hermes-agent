@@ -73,17 +73,16 @@ from tools.terminal_tool import cleanup_vm
 from tools.interrupt import set_interrupt as _set_interrupt
 from tools.browser_tool import cleanup_browser
 
-import requests
 
-from hermes_constants import OPENROUTER_BASE_URL, OPENROUTER_MODELS_URL
+from hermes_constants import OPENROUTER_BASE_URL
 
 # Agent internals extracted to agent/ package for modularity
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    SWITCH_MODEL_GUIDANCE,
 )
 from agent.model_metadata import (
-    fetch_model_metadata, get_model_context_length,
     estimate_tokens_rough, estimate_messages_tokens_rough,
     get_next_probe_tier, parse_context_limit_from_error,
     save_context_length,
@@ -331,6 +330,9 @@ class AIAgent:
         else:
             self.api_mode = "chat_completions"
 
+        # Remember the original model for switch_model tool guidance
+        self._original_model = {"provider": self.provider, "model": self.model}
+
         self.tool_progress_callback = tool_progress_callback
         self.thinking_callback = thinking_callback
         self.reasoning_callback = reasoning_callback
@@ -341,10 +343,14 @@ class AIAgent:
         # Interrupt mechanism for breaking out of tool loops
         self._interrupt_requested = False
         self._interrupt_message = None  # Optional message that triggered interrupt
+
+        # Deferred model switch — set by external control API, applied between iterations
+        self._pending_model_switch = None  # dict with provider, model keys
         
         # Subagent delegation state
         self._delegate_depth = 0        # 0 = top-level agent, incremented for children
         self._active_children = []      # Running child AIAgents (for interrupt propagation)
+        self._active_children_lock = threading.Lock()
         
         # Store OpenRouter provider preferences
         self.providers_allowed = providers_allowed
@@ -1134,7 +1140,7 @@ class AIAgent:
                     while j < len(messages) and messages[j]["role"] == "tool":
                         tool_msg = messages[j]
                         # Format tool response with XML tags
-                        tool_response = f"<tool_response>\n"
+                        tool_response = "<tool_response>\n"
                         
                         # Try to parse tool content as JSON if it looks like JSON
                         tool_content = tool_msg["content"]
@@ -1388,13 +1394,15 @@ class AIAgent:
         # Signal all tools to abort any in-flight operations immediately
         _set_interrupt(True)
         # Propagate interrupt to any running child agents (subagent delegation)
-        for child in self._active_children:
+        with self._active_children_lock:
+            children_snapshot = list(self._active_children)
+        for child in children_snapshot:
             try:
                 child.interrupt(message)
             except Exception as e:
                 logger.debug("Failed to propagate interrupt to child agent: %s", e)
         if not self.quiet_mode:
-            print(f"\n⚡ Interrupt requested" + (f": '{message[:40]}...'" if message and len(message) > 40 else f": '{message}'" if message else ""))
+            print("\n⚡ Interrupt requested" + (f": '{message[:40]}...'" if message and len(message) > 40 else f": '{message}'" if message else ""))
     
     def clear_interrupt(self) -> None:
         """Clear any pending interrupt request and the global tool interrupt signal."""
@@ -1696,6 +1704,10 @@ class AIAgent:
             tool_guidance.append(SESSION_SEARCH_GUIDANCE)
         if "skill_manage" in self.valid_tool_names:
             tool_guidance.append(SKILLS_GUIDANCE)
+        if "switch_model" in self.valid_tool_names:
+            tool_guidance.append(SWITCH_MODEL_GUIDANCE.format(
+                original_model=f"{self._original_model['provider']}:{self._original_model['model']}"
+            ))
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 
@@ -2153,7 +2165,7 @@ class AIAgent:
         allowed_keys = {
             "model", "instructions", "input", "tools", "store",
             "reasoning", "include", "max_output_tokens", "temperature",
-            "tool_choice", "parallel_tool_calls", "prompt_cache_key",
+            "tool_choice", "parallel_tool_calls",
         }
         normalized: Dict[str, Any] = {
             "model": model,
@@ -2179,8 +2191,8 @@ class AIAgent:
         if isinstance(temperature, (int, float)):
             normalized["temperature"] = float(temperature)
 
-        # Pass through tool_choice, parallel_tool_calls, prompt_cache_key
-        for passthrough_key in ("tool_choice", "parallel_tool_calls", "prompt_cache_key"):
+        # Pass through tool_choice and parallel_tool_calls
+        for passthrough_key in ("tool_choice", "parallel_tool_calls"):
             val = api_kwargs.get(passthrough_key)
             if val is not None:
                 normalized[passthrough_key] = val
@@ -2570,6 +2582,44 @@ class AIAgent:
             raise result["error"]
         return result["response"]
 
+    # ── Provider credential swap ─────────────────────────────────────────
+
+    def _apply_provider_credentials(self, creds: dict) -> None:
+        """Apply a resolved credentials bundle to this agent in-place.
+
+        *creds* is a dict from :func:`resolve_provider_credentials` with
+        keys: provider, model, base_url, api_key, api_mode, client.
+
+        Handles the OpenAI-vs-Anthropic client split and re-evaluates
+        prompt-caching eligibility.
+        """
+        self.model = creds["model"]
+        self.provider = creds["provider"]
+        self.base_url = creds["base_url"]
+        self.api_mode = creds["api_mode"]
+
+        if creds["api_mode"] == "anthropic_messages":
+            from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token
+            effective_key = creds["api_key"] or resolve_anthropic_token() or ""
+            self._anthropic_api_key = effective_key
+            self._anthropic_client = build_anthropic_client(effective_key)
+            self.client = None
+            self._client_kwargs = {}
+        else:
+            self.client = creds["client"]
+            self._client_kwargs = {
+                "api_key": creds["api_key"],
+                "base_url": creds["base_url"],
+            }
+
+        # Re-evaluate prompt caching for the new provider/model
+        is_native_anthropic = creds["api_mode"] == "anthropic_messages"
+        self._use_prompt_caching = (
+            ("openrouter" in creds["base_url"].lower()
+             and "claude" in creds["model"].lower())
+            or is_native_anthropic
+        )
+
     # ── Provider fallback ──────────────────────────────────────────────────
 
     def _try_activate_fallback(self) -> bool:
@@ -2593,56 +2643,18 @@ class AIAgent:
         if not fb_provider or not fb_model:
             return False
 
-        # Use centralized router for client construction.
-        # raw_codex=True because the main agent needs direct responses.stream()
-        # access for Codex providers.
         try:
-            from agent.auxiliary_client import resolve_provider_client
-            fb_client, _ = resolve_provider_client(
-                fb_provider, model=fb_model, raw_codex=True)
-            if fb_client is None:
+            from agent.auxiliary_client import resolve_provider_credentials
+            creds = resolve_provider_credentials(fb_provider, fb_model)
+            if creds is None:
                 logging.warning(
                     "Fallback to %s failed: provider not configured",
                     fb_provider)
                 return False
 
-            # Determine api_mode from provider
-            fb_api_mode = "chat_completions"
-            if fb_provider == "openai-codex":
-                fb_api_mode = "codex_responses"
-            elif fb_provider == "anthropic":
-                fb_api_mode = "anthropic_messages"
-            fb_base_url = str(fb_client.base_url)
-
             old_model = self.model
-            self.model = fb_model
-            self.provider = fb_provider
-            self.base_url = fb_base_url
-            self.api_mode = fb_api_mode
+            self._apply_provider_credentials(creds)
             self._fallback_activated = True
-
-            if fb_api_mode == "anthropic_messages":
-                # Build native Anthropic client instead of using OpenAI client
-                from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token
-                effective_key = fb_client.api_key or resolve_anthropic_token() or ""
-                self._anthropic_api_key = effective_key
-                self._anthropic_client = build_anthropic_client(effective_key)
-                self.client = None
-                self._client_kwargs = {}
-            else:
-                # Swap OpenAI client and config in-place
-                self.client = fb_client
-                self._client_kwargs = {
-                    "api_key": fb_client.api_key,
-                    "base_url": fb_base_url,
-                }
-
-            # Re-evaluate prompt caching for the new provider/model
-            is_native_anthropic = fb_api_mode == "anthropic_messages"
-            self._use_prompt_caching = (
-                ("openrouter" in fb_base_url.lower() and "claude" in fb_model.lower())
-                or is_native_anthropic
-            )
 
             print(
                 f"{self.log_prefix}🔄 Primary model failed — switching to fallback: "
@@ -2656,6 +2668,55 @@ class AIAgent:
         except Exception as e:
             logging.error("Failed to activate fallback model: %s", e)
             return False
+
+    # ── Explicit model switch (switch_model tool) ───────────────────────────
+
+    def _switch_model(self, provider: str, model: str) -> dict:
+        """Switch the active model/provider in-place.
+
+        Called by the switch_model tool.  Returns a result dict
+        (success/failure + current state).
+        """
+        provider = provider.strip().lower()
+        model = model.strip()
+
+        old_provider = self.provider
+        old_model = self.model
+
+        try:
+            from agent.auxiliary_client import resolve_provider_credentials
+            creds = resolve_provider_credentials(provider, model)
+            if creds is None:
+                return {
+                    "success": False,
+                    "error": f"Provider '{provider}' is not configured. "
+                             f"Set the appropriate API key or run 'hermes setup'.",
+                    "current": {"provider": old_provider, "model": old_model},
+                }
+
+            self._apply_provider_credentials(creds)
+
+            print(
+                f"{self.log_prefix}🔄 Model switched: "
+                f"{old_model} → {model} via {provider}"
+            )
+            logging.info(
+                "Model switched: %s → %s (%s)",
+                old_model, model, provider,
+            )
+            return {
+                "success": True,
+                "previous": {"provider": old_provider, "model": old_model},
+                "current": {"provider": provider, "model": model},
+                "message": "Model switched successfully",
+            }
+        except Exception as e:
+            logging.error("Failed to switch model: %s", e)
+            return {
+                "success": False,
+                "error": f"Failed to switch model: {e}",
+                "current": {"provider": old_provider, "model": old_model},
+            }
 
     # ── End provider fallback ──────────────────────────────────────────────
 
@@ -2697,8 +2758,8 @@ class AIAgent:
                 "tool_choice": "auto",
                 "parallel_tool_calls": True,
                 "store": False,
-                "prompt_cache_key": self.session_id,
             }
+
 
             if reasoning_enabled:
                 kwargs["reasoning"] = {"effort": reasoning_effort, "summary": "auto"}
@@ -3205,7 +3266,34 @@ class AIAgent:
                 toolsets=function_args.get("toolsets"),
                 tasks=function_args.get("tasks"),
                 max_iterations=function_args.get("max_iterations"),
+                model=function_args.get("model"),
+                provider=function_args.get("provider"),
                 parent_agent=self,
+            )
+        elif function_name == "switch_model":
+            action = function_args.get("action", "list")
+            if action == "list":
+                from tools.switch_model_tool import switch_model_list
+                return switch_model_list(
+                    current_provider=self.provider,
+                    current_model=self.model,
+                    original=self._original_model,
+                )
+            else:
+                from tools.switch_model_tool import switch_model_switch
+                return switch_model_switch(
+                    provider=function_args.get("provider", ""),
+                    model=function_args.get("model", ""),
+                    reason=function_args.get("reason", ""),
+                    agent=self,
+                )
+        elif function_name == "smart_model":
+            from tools.smart_model_tool import smart_model_handle
+            return smart_model_handle(
+                agent=self,
+                preset=function_args.get("preset", "balanced"),
+                custom_provider=function_args.get("provider", ""),
+                custom_model=function_args.get("model", ""),
             )
         else:
             return handle_function_call(
@@ -3232,6 +3320,12 @@ class AIAgent:
                     "tool_call_id": tc.id,
                 })
             return
+
+        # ── State-mutating tools: force sequential to prevent races ──────
+        if any(tc.function.name in ("switch_model", "smart_model") for tc in tool_calls):
+            return self._execute_tool_calls_sequential(
+                assistant_message, messages, effective_task_id, api_call_count
+            )
 
         # ── Parse args + pre-execution bookkeeping ───────────────────────
         parsed_calls = []  # list of (tool_call, function_name, function_args)
@@ -4023,6 +4117,12 @@ class AIAgent:
                     if _preflight_tokens < self.context_compressor.threshold_tokens:
                         break  # Under threshold
 
+        # Apply any deferred model switch before entering the loop
+        if self._pending_model_switch:
+            _ps = self._pending_model_switch
+            self._pending_model_switch = None
+            self._switch_model(_ps["provider"], _ps["model"])
+
         # Main conversation loop
         api_call_count = 0
         final_response = None
@@ -4042,9 +4142,15 @@ class AIAgent:
             if self._interrupt_requested:
                 interrupted = True
                 if not self.quiet_mode:
-                    print(f"\n⚡ Breaking out of tool loop due to interrupt...")
+                    print("\n⚡ Breaking out of tool loop due to interrupt...")
                 break
-            
+
+            # Apply deferred model switch from external control API
+            if self._pending_model_switch:
+                _ps = self._pending_model_switch
+                self._pending_model_switch = None
+                self._switch_model(_ps["provider"], _ps["model"])
+
             api_call_count += 1
             if not self.iteration_budget.consume():
                 if not self.quiet_mode:
@@ -4250,7 +4356,7 @@ class AIAgent:
                     if response_invalid:
                         # Stop spinner before printing error messages
                         if thinking_spinner:
-                            thinking_spinner.stop(f"(´;ω;`) oops, retrying...")
+                            thinking_spinner.stop("(´;ω;`) oops, retrying...")
                             thinking_spinner = None
                         if self.thinking_callback:
                             self.thinking_callback("")
@@ -4483,7 +4589,7 @@ class AIAgent:
                 except Exception as api_error:
                     # Stop spinner before printing error messages
                     if thinking_spinner:
-                        thinking_spinner.stop(f"(╥_╥) error, retrying...")
+                        thinking_spinner.stop("(╥_╥) error, retrying...")
                         thinking_spinner = None
                     if self.thinking_callback:
                         self.thinking_callback("")
@@ -4937,7 +5043,7 @@ class AIAgent:
                             if tc.function.name not in self.valid_tool_names:
                                 content = f"Tool '{tc.function.name}' does not exist. Available tools: {available}"
                             else:
-                                content = f"Skipped: another tool call in this turn used an invalid name. Please retry this tool call."
+                                content = "Skipped: another tool call in this turn used an invalid name. Please retry this tool call."
                             messages.append({
                                 "role": "tool",
                                 "tool_call_id": tc.id,
@@ -5407,20 +5513,20 @@ def main(
             toolset = get_toolset_for_tool(tool_name)
             print(f"  📌 {tool_name} (from {toolset})")
         
-        print(f"\n💡 Usage Examples:")
-        print(f"  # Use predefined toolsets")
-        print(f"  python run_agent.py --enabled_toolsets=research --query='search for Python news'")
-        print(f"  python run_agent.py --enabled_toolsets=development --query='debug this code'")
-        print(f"  python run_agent.py --enabled_toolsets=safe --query='analyze without terminal'")
-        print(f"  ")
-        print(f"  # Combine multiple toolsets")
-        print(f"  python run_agent.py --enabled_toolsets=web,vision --query='analyze website'")
-        print(f"  ")
-        print(f"  # Disable toolsets")
-        print(f"  python run_agent.py --disabled_toolsets=terminal --query='no command execution'")
-        print(f"  ")
-        print(f"  # Run with trajectory saving enabled")
-        print(f"  python run_agent.py --save_trajectories --query='your question here'")
+        print("\n💡 Usage Examples:")
+        print("  # Use predefined toolsets")
+        print("  python run_agent.py --enabled_toolsets=research --query='search for Python news'")
+        print("  python run_agent.py --enabled_toolsets=development --query='debug this code'")
+        print("  python run_agent.py --enabled_toolsets=safe --query='analyze without terminal'")
+        print("  ")
+        print("  # Combine multiple toolsets")
+        print("  python run_agent.py --enabled_toolsets=web,vision --query='analyze website'")
+        print("  ")
+        print("  # Disable toolsets")
+        print("  python run_agent.py --disabled_toolsets=terminal --query='no command execution'")
+        print("  ")
+        print("  # Run with trajectory saving enabled")
+        print("  python run_agent.py --save_trajectories --query='your question here'")
         return
     
     # Parse toolset selection arguments
@@ -5436,9 +5542,9 @@ def main(
         print(f"🚫 Disabled toolsets: {disabled_toolsets_list}")
     
     if save_trajectories:
-        print(f"💾 Trajectory saving: ENABLED")
-        print(f"   - Successful conversations → trajectory_samples.jsonl")
-        print(f"   - Failed conversations → failed_trajectories.jsonl")
+        print("💾 Trajectory saving: ENABLED")
+        print("   - Successful conversations → trajectory_samples.jsonl")
+        print("   - Failed conversations → failed_trajectories.jsonl")
     
     # Initialize agent with provided parameters
     try:
@@ -5480,7 +5586,7 @@ def main(
     print(f"💬 Messages: {len(result['messages'])}")
     
     if result['final_response']:
-        print(f"\n🎯 FINAL RESPONSE:")
+        print("\n🎯 FINAL RESPONSE:")
         print("-" * 30)
         print(result['final_response'])
     
