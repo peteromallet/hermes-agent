@@ -9,12 +9,12 @@ Covers: local image file sending, file-not-found handling, fallback on error,
 import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from gateway.config import PlatformConfig
-from gateway.platforms.base import BasePlatformAdapter, SendResult
+from gateway.platforms.base import BasePlatformAdapter
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +164,6 @@ def _ensure_discord_mock():
 
 _ensure_discord_mock()
 
-import discord as discord_mod_ref  # noqa: E402
 from gateway.platforms.discord import DiscordAdapter  # noqa: E402
 
 

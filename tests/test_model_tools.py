@@ -1,7 +1,6 @@
 """Tests for model_tools.py — function call dispatch, agent-loop interception, legacy toolsets."""
 
 import json
-import pytest
 
 from model_tools import (
     handle_function_call,

@@ -10,7 +10,6 @@ Run with:  python -m pytest tests/test_delegate.py -v
 """
 
 import json
-import sys
 import unittest
 from unittest.mock import MagicMock, patch
 

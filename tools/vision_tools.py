@@ -86,7 +86,6 @@ async def _download_image(image_url: str, destination: Path, max_retries: int = 
     Raises:
         Exception: If download fails after all retries
     """
-    import asyncio
     
     # Create parent directories if they don't exist
     destination.parent.mkdir(parents=True, exist_ok=True)

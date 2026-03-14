@@ -1,7 +1,6 @@
 """Tests for tools/skills_hub.py — source adapters, lock file, taps, dedup logic."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from tools.skills_hub import (
@@ -9,7 +8,6 @@ from tools.skills_hub import (
     GitHubSource,
     LobeHubSource,
     SkillMeta,
-    SkillBundle,
     HubLockFile,
     TapsManager,
     unified_search,

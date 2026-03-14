@@ -8,7 +8,6 @@ project files, and config changes survive across sessions.
 import json
 import logging
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional

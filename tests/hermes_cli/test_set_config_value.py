@@ -1,8 +1,7 @@
 """Tests for set_config_value — verifying secrets route to .env and config to config.yaml."""
 
 import os
-from pathlib import Path
-from unittest.mock import patch, call
+from unittest.mock import patch
 
 import pytest
 

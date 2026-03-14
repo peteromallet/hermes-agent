@@ -8,9 +8,6 @@ Logs every step to stderr (which isn't affected by redirect_stdout)
 so we can see exactly where the interrupt gets lost.
 """
 
-import contextlib
-import io
-import json
 import logging
 import queue
 import sys
@@ -27,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import MagicMock, patch
 from run_agent import AIAgent, IterationBudget
-from tools.interrupt import set_interrupt, is_interrupted
+from tools.interrupt import set_interrupt
 
 set_interrupt(False)
 
@@ -79,7 +76,7 @@ def make_slow_response(delay=2.0):
     def create(**kwargs):
         log.info(f"   🌐 Mock API call starting (will take {delay}s)...")
         time.sleep(delay)
-        log.info(f"   🌐 Mock API call completed")
+        log.info("   🌐 Mock API call completed")
         resp = MagicMock()
         resp.choices = [MagicMock()]
         resp.choices[0].message.content = "Done with the task"
@@ -158,9 +155,9 @@ while agent_thread.is_alive():
         interrupt_msg = interrupt_queue.get(timeout=0.1)
         if interrupt_msg:
             log.info(f"📨 Got interrupt message from queue: {interrupt_msg!r}")
-            log.info(f"   Calling parent.interrupt()...")
+            log.info("   Calling parent.interrupt()...")
             parent.interrupt(interrupt_msg)
-            log.info(f"   parent.interrupt() returned. Breaking poll loop.")
+            log.info("   parent.interrupt() returned. Breaking poll loop.")
             break
     except queue.Empty:
         poll_count += 1

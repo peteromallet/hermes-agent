@@ -509,7 +509,6 @@ def _create_browserbase_session(task_id: str) -> Dict[str, str]:
         Dict with session_name, bb_session_id, cdp_url, and feature flags
     """
     import uuid
-    import sys
     
     config = _get_browserbase_config()
     
@@ -701,18 +700,6 @@ def _get_session_info(task_id: Optional[str] = None) -> Dict[str, str]:
     return session_info
 
 
-def _get_session_name(task_id: Optional[str] = None) -> str:
-    """
-    Get the session name for agent-browser CLI.
-    
-    Args:
-        task_id: Unique identifier for the task
-        
-    Returns:
-        Session name for agent-browser
-    """
-    session_info = _get_session_info(task_id)
-    return session_info["session_name"]
 
 
 def _get_browserbase_config() -> Dict[str, str]:

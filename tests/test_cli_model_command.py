@@ -1,6 +1,6 @@
 """Regression tests for the `/model` slash command in the interactive CLI."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from cli import HermesCLI
 

@@ -369,8 +369,8 @@ def execute_code(
     if not code or not code.strip():
         return json.dumps({"error": "No code provided."})
 
-    # Import interrupt event from terminal_tool (cooperative cancellation)
-    from tools.terminal_tool import _interrupt_event
+    # Import interrupt event (cooperative cancellation)
+    from tools.interrupt import _interrupt_event
 
     # Resolve config
     _cfg = _load_config()

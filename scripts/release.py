@@ -21,8 +21,6 @@ Usage:
 """
 
 import argparse
-import json
-import os
 import re
 import subprocess
 import sys
@@ -459,7 +457,7 @@ def main():
             return
 
     print(f"{'='*60}")
-    print(f"  Hermes Agent Release Preview")
+    print("  Hermes Agent Release Preview")
     print(f"{'='*60}")
     print(f"  CalVer tag:      {tag_name}")
     print(f"  SemVer:          v{current_version} → v{new_version}")
@@ -496,7 +494,7 @@ def main():
             # Commit version bump
             git("add", str(VERSION_FILE), str(PYPROJECT_FILE))
             git("commit", "-m", f"chore: bump version to v{new_version} ({calver_date})")
-            print(f"  ✓ Committed version bump")
+            print("  ✓ Committed version bump")
 
         # Create annotated tag
         git("tag", "-a", tag_name, "-m",
@@ -505,7 +503,7 @@ def main():
 
         # Push
         push_result = git("push", "origin", "HEAD", "--tags")
-        print(f"  ✓ Pushed to origin")
+        print("  ✓ Pushed to origin")
 
         # Create GitHub release
         changelog_file = REPO_ROOT / ".release_notes.md"
@@ -525,14 +523,14 @@ def main():
             print(f"  ✓ GitHub release created: {result.stdout.strip()}")
         else:
             print(f"  ✗ GitHub release failed: {result.stderr}")
-            print(f"    Tag was created. Create the release manually:")
+            print("    Tag was created. Create the release manually:")
             print(f"    gh release create {tag_name} --title 'Hermes Agent v{new_version} ({calver_date})'")
 
         print(f"\n  🎉 Release v{new_version} ({tag_name}) published!")
     else:
         print(f"\n{'='*60}")
-        print(f"  Dry run complete. To publish, add --publish")
-        print(f"  Example: python scripts/release.py --bump minor --publish")
+        print("  Dry run complete. To publish, add --publish")
+        print("  Example: python scripts/release.py --bump minor --publish")
         print(f"{'='*60}")
 
 

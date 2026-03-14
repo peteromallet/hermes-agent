@@ -2,7 +2,6 @@
 
 import logging
 
-import pytest
 
 from agent.redact import redact_sensitive_text, RedactingFormatter
 

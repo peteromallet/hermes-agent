@@ -1,10 +1,8 @@
 """Tests for batch_runner checkpoint behavior — incremental writes, resume, atomicity."""
 
 import json
-import os
 from pathlib import Path
 from multiprocessing import Lock
-from unittest.mock import patch, MagicMock
 
 import pytest
 

@@ -10,8 +10,6 @@ from tools.skills_sync import (
     _compute_relative_dest,
     _dir_hash,
     sync_skills,
-    MANIFEST_FILE,
-    SKILLS_DIR,
 )
 
 

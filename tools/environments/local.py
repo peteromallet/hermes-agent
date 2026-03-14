@@ -203,7 +203,7 @@ class LocalEnvironment(BaseEnvironment):
     def execute(self, command: str, cwd: str = "", *,
                 timeout: int | None = None,
                 stdin_data: str | None = None) -> dict:
-        from tools.terminal_tool import _interrupt_event
+        from tools.interrupt import _interrupt_event
 
         work_dir = cwd or self.cwd or os.getcwd()
         effective_timeout = timeout or self.timeout

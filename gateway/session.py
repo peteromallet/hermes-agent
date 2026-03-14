@@ -14,7 +14,7 @@ import json
 import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 from .config import (
     Platform,
     GatewayConfig,
-    SessionResetPolicy,
     HomeChannel,
 )
 

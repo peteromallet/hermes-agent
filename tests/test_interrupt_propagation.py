@@ -4,13 +4,12 @@ Reproduces the CLI scenario: user sends a message while delegate_task is
 running, main thread calls parent.interrupt(), child should stop.
 """
 
-import json
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
-from tools.interrupt import set_interrupt, is_interrupted, _interrupt_event
+from tools.interrupt import set_interrupt, is_interrupted
 
 
 class TestInterruptPropagationToChild(unittest.TestCase):
@@ -30,12 +29,14 @@ class TestInterruptPropagationToChild(unittest.TestCase):
         parent._interrupt_requested = False
         parent._interrupt_message = None
         parent._active_children = []
+        parent._active_children_lock = threading.Lock()
         parent.quiet_mode = True
 
         child = AIAgent.__new__(AIAgent)
         child._interrupt_requested = False
         child._interrupt_message = None
         child._active_children = []
+        child._active_children_lock = threading.Lock()
         child.quiet_mode = True
 
         parent._active_children.append(child)
@@ -49,7 +50,7 @@ class TestInterruptPropagationToChild(unittest.TestCase):
 
     def test_child_clear_interrupt_at_start_clears_global(self):
         """child.clear_interrupt() at start of run_conversation clears the GLOBAL event.
-        
+
         This is the intended behavior at startup, but verify it doesn't
         accidentally clear an interrupt intended for a running child.
         """
@@ -60,6 +61,7 @@ class TestInterruptPropagationToChild(unittest.TestCase):
         child._interrupt_message = "msg"
         child.quiet_mode = True
         child._active_children = []
+        child._active_children_lock = threading.Lock()
 
         # Global is set
         set_interrupt(True)
@@ -78,6 +80,7 @@ class TestInterruptPropagationToChild(unittest.TestCase):
         child._interrupt_requested = False
         child._interrupt_message = None
         child._active_children = []
+        child._active_children_lock = threading.Lock()
         child.quiet_mode = True
         child.api_mode = "chat_completions"
         child.log_prefix = ""
@@ -119,12 +122,14 @@ class TestInterruptPropagationToChild(unittest.TestCase):
         parent._interrupt_requested = False
         parent._interrupt_message = None
         parent._active_children = []
+        parent._active_children_lock = threading.Lock()
         parent.quiet_mode = True
 
         child = AIAgent.__new__(AIAgent)
         child._interrupt_requested = False
         child._interrupt_message = None
         child._active_children = []
+        child._active_children_lock = threading.Lock()
         child.quiet_mode = True
 
         # Register child (simulating what _run_single_child does)

@@ -10,15 +10,12 @@ This tests the COMPLETE path including _run_single_child, _active_children
 registration, interrupt propagation, and child detection.
 """
 
-import json
-import os
-import queue
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
-from tools.interrupt import set_interrupt, is_interrupted
+from tools.interrupt import set_interrupt
 
 
 class TestCLISubagentInterrupt(unittest.TestCase):
@@ -43,6 +40,7 @@ class TestCLISubagentInterrupt(unittest.TestCase):
         parent._interrupt_requested = False
         parent._interrupt_message = None
         parent._active_children = []
+        parent._active_children_lock = threading.Lock()
         parent.quiet_mode = True
         parent.model = "test/model"
         parent.base_url = "http://localhost:1"

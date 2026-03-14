@@ -1,6 +1,5 @@
 """Tests for trajectory_compressor.py — config, metrics, and compression logic."""
 
-import json
 from unittest.mock import patch, MagicMock
 
 from trajectory_compressor import (

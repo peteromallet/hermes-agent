@@ -5,7 +5,6 @@ conversion pipeline), and edge cases that could produce invalid MarkdownV2
 or corrupt user-visible content.
 """
 
-import re
 import sys
 from unittest.mock import MagicMock
 

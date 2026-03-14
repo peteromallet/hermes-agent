@@ -1,6 +1,5 @@
 """Tests for API-key provider support (z.ai/GLM, Kimi, MiniMax)."""
 
-import os
 import sys
 import types
 
@@ -14,7 +13,6 @@ if "dotenv" not in sys.modules:
 
 from hermes_cli.auth import (
     PROVIDER_REGISTRY,
-    ProviderConfig,
     resolve_provider,
     get_api_key_provider_status,
     resolve_api_key_provider_credentials,

@@ -30,15 +30,11 @@ import json
 import logging
 import os
 import platform
-import signal
 import sys
 import time
 import threading
 import atexit
 import shutil
-import subprocess
-import tempfile
-import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -50,7 +46,6 @@ logger = logging.getLogger(__name__)
 # The terminal tool polls this during command execution so it can kill
 # long-running subprocesses immediately instead of blocking until timeout.
 # ---------------------------------------------------------------------------
-from tools.interrupt import set_interrupt as set_interrupt_event, is_interrupted, _interrupt_event
 
 
 # Add mini-swe-agent to path if not installed
@@ -95,7 +90,7 @@ def _check_disk_usage_warning():
             return True
         
         return False
-    except Exception as e:
+    except Exception:
         return False
 
 
@@ -128,10 +123,7 @@ def set_approval_callback(cb):
 
 # Dangerous command detection + approval now consolidated in tools/approval.py
 from tools.approval import (
-    detect_dangerous_command as _detect_dangerous_command,
     check_dangerous_command as _check_dangerous_command_impl,
-    load_permanent_allowlist as _load_permanent_allowlist,
-    DANGEROUS_PATTERNS,
 )
 
 
@@ -554,7 +546,8 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
             sandbox_kwargs["memory"] = memory
         if disk > 0:
             try:
-                import inspect, modal
+                import inspect
+                import modal
                 if "ephemeral_disk" in inspect.signature(modal.Sandbox.create).parameters:
                     sandbox_kwargs["ephemeral_disk"] = disk
             except Exception:
@@ -1130,10 +1123,8 @@ def check_terminal_requirements() -> bool:
     
     try:
         if env_type == "local":
-            from minisweagent.environments.local import LocalEnvironment
             return True
         elif env_type == "docker":
-            from minisweagent.environments.docker import DockerEnvironment
             # Check if docker is available (use find_docker for macOS PATH issues)
             from tools.environments.docker import find_docker
             import subprocess
@@ -1144,7 +1135,6 @@ def check_terminal_requirements() -> bool:
             result = subprocess.run([docker, "version"], capture_output=True, timeout=5)
             return result.returncode == 0
         elif env_type == "singularity":
-            from minisweagent.environments.singularity import SingularityEnvironment
             # Check if singularity/apptainer is available
             import subprocess
             import shutil
@@ -1154,15 +1144,12 @@ def check_terminal_requirements() -> bool:
                 return result.returncode == 0
             return False
         elif env_type == "ssh":
-            from tools.environments.ssh import SSHEnvironment
             # Check that host and user are configured
             return bool(config.get("ssh_host")) and bool(config.get("ssh_user"))
         elif env_type == "modal":
-            from minisweagent.environments.extra.swerex_modal import SwerexModalEnvironment
             # Check for modal token
             return os.getenv("MODAL_TOKEN_ID") is not None or Path.home().joinpath(".modal.toml").exists()
         elif env_type == "daytona":
-            from daytona import Daytona
             return os.getenv("DAYTONA_API_KEY") is not None
         else:
             return False
@@ -1177,7 +1164,7 @@ if __name__ == "__main__":
     print("=" * 50)
     
     config = _get_env_config()
-    print(f"\nCurrent Configuration:")
+    print("\nCurrent Configuration:")
     print(f"  Environment type: {config['env_type']}")
     print(f"  Docker image: {config['docker_image']}")
     print(f"  Modal image: {config['modal_image']}")

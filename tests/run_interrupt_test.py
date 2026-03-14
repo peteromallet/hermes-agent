@@ -117,7 +117,7 @@ for i, c in enumerate(parent._active_children):
 
 t0 = time.monotonic()
 parent.interrupt("User typed a new message")
-print(f"Called parent.interrupt()")
+print("Called parent.interrupt()")
 
 for i, c in enumerate(parent._active_children):
     print(f"  Child {i} after interrupt: _interrupt_requested={c._interrupt_requested}")

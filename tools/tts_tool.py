@@ -27,7 +27,6 @@ import logging
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -427,7 +426,7 @@ if __name__ == "__main__":
     print("🔊 Text-to-Speech Tool Module")
     print("=" * 50)
 
-    print(f"\nProvider availability:")
+    print("\nProvider availability:")
     print(f"  Edge TTS:   {'✅ installed' if _HAS_EDGE_TTS else '❌ not installed (pip install edge-tts)'}")
     print(f"  ElevenLabs: {'✅ installed' if _HAS_ELEVENLABS else '❌ not installed (pip install elevenlabs)'}")
     print(f"    API Key:  {'✅ set' if os.getenv('ELEVENLABS_API_KEY') else '❌ not set'}")

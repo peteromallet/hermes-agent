@@ -13,7 +13,6 @@ pytestmark = pytest.mark.skip(reason="Hangs in non-interactive environments")
 
 
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -518,7 +517,6 @@ class TestExpandPath:
         # The path should be returned as-is (no expansion).
         assert result == malicious
         # Verify the injected command did NOT execute
-        import os
         assert not os.path.exists("/tmp/_hermes_injection_test")
 
     def test_tilde_username_with_subpath(self, ops):

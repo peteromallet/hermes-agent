@@ -15,12 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gateway.config import Platform, PlatformConfig
+from gateway.config import PlatformConfig
 from gateway.platforms.base import (
-    MessageEvent,
     MessageType,
-    SendResult,
-    SUPPORTED_DOCUMENT_TYPES,
 )
 
 

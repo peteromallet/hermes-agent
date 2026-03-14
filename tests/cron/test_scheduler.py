@@ -1,10 +1,8 @@
 """Tests for cron/scheduler.py — origin resolution, delivery routing, and error logging."""
 
-import json
 import logging
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 from cron.scheduler import _resolve_origin, _deliver_result, run_job
 

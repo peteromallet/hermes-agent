@@ -1,7 +1,6 @@
 """Tests for honcho_integration/session.py — HonchoSession and helpers."""
 
 from datetime import datetime
-from unittest.mock import MagicMock
 
 from honcho_integration.session import (
     HonchoSession,

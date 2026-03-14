@@ -15,7 +15,7 @@ Based on VLLM's DeepSeekV3ToolParser.extract_tool_calls()
 
 import re
 import uuid
-from typing import List, Optional
+from typing import List
 
 from openai.types.chat.chat_completion_message_tool_call import (
     ChatCompletionMessageToolCall,

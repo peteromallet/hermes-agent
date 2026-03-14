@@ -23,7 +23,6 @@ import logging
 import os
 import shutil
 import subprocess
-import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -423,7 +422,7 @@ class CheckpointManager:
         # Get the hash of the commit at the cutoff point
         ok, cutoff_hash, _ = _run_git(
             ["rev-list", "--reverse", "HEAD", "--skip=0",
-             f"--max-count=1"],
+             "--max-count=1"],
             shadow_repo, working_dir,
         )
 
@@ -450,5 +449,5 @@ def format_checkpoint_list(checkpoints: List[Dict], directory: str) -> str:
             ts = f"{date} {ts}"
         lines.append(f"  {i}. {cp['short_hash']}  {ts}  {cp['reason']}")
 
-    lines.append(f"\nUse /rollback <number> to restore, e.g. /rollback 1")
+    lines.append("\nUse /rollback <number> to restore, e.g. /rollback 1")
     return "\n".join(lines)

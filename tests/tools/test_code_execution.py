@@ -19,7 +19,6 @@ pytestmark = pytest.mark.skip(reason="Hangs in non-interactive environments")
 import json
 import os
 import sys
-import time
 import threading
 import unittest
 from unittest.mock import patch, MagicMock
@@ -725,7 +724,7 @@ class TestInterruptHandling(unittest.TestCase):
         def set_interrupt_after_delay():
             import time as _t
             _t.sleep(1)
-            from tools.terminal_tool import _interrupt_event
+            from tools.interrupt import _interrupt_event
             _interrupt_event.set()
 
         t = threading.Thread(target=set_interrupt_after_delay, daemon=True)
@@ -743,7 +742,7 @@ class TestInterruptHandling(unittest.TestCase):
             self.assertEqual(result["status"], "interrupted")
             self.assertIn("interrupted", result["output"])
         finally:
-            from tools.terminal_tool import _interrupt_event
+            from tools.interrupt import _interrupt_event
             _interrupt_event.clear()
             t.join(timeout=3)
 

@@ -1,7 +1,6 @@
 """Tests for --yolo (HERMES_YOLO_MODE) approval bypass."""
 
 import os
-import pytest
 
 from tools.approval import check_dangerous_command, detect_dangerous_command
 

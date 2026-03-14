@@ -5,14 +5,10 @@ import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 from honcho_integration.client import (
     HonchoClientConfig,
-    get_honcho_client,
     reset_honcho_client,
-    GLOBAL_CONFIG_PATH,
-    HOST,
 )
 
 

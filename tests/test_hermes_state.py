@@ -2,7 +2,6 @@
 
 import time
 import pytest
-from pathlib import Path
 
 from hermes_state import SessionDB
 

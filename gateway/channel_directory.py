@@ -117,7 +117,6 @@ def _build_slack(adapter) -> List[Dict[str, str]]:
         return _build_from_sessions("slack")
 
     try:
-        import asyncio
         from tools.send_message_tool import _send_slack  # noqa: F401
         # Use the Slack Web API directly if available
     except Exception:
