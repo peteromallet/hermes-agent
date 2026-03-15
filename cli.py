@@ -1179,6 +1179,10 @@ class HermesCLI:
         self._background_tasks: Dict[str, threading.Thread] = {}
         self._background_task_counter = 0
 
+        # Auto-reply config (ephemeral, in-memory only)
+        # {"prompt": str, "model": str|None, "max_turns": int, "turn_count": int, "literal": bool}
+        self._autoreply_config: Optional[Dict[str, Any]] = None
+
     def _invalidate(self, min_interval: float = 0.25) -> None:
         """Throttled UI repaint — prevents terminal blinking on slow/SSH connections."""
         import time as _time
@@ -2748,6 +2752,7 @@ class HermesCLI:
                 else:
                     _cprint("  Session database not available.")
         elif cmd_lower in ("/reset", "/new"):
+            self._autoreply_config = None
             self.reset_conversation()
         elif cmd_lower.startswith("/model"):
             # Use original case so model names like "Anthropic/Claude-Opus-4" are preserved
@@ -2872,6 +2877,8 @@ class HermesCLI:
             self._handle_rollback_command(cmd_original)
         elif cmd_lower.startswith("/background"):
             self._handle_background_command(cmd_original)
+        elif cmd_lower.startswith("/autoreply"):
+            self._handle_autoreply_command(cmd_original)
         elif cmd_lower.startswith("/skin"):
             self._handle_skin_command(cmd_original)
         else:
@@ -2923,6 +2930,79 @@ class HermesCLI:
         
         return True
     
+    def _handle_autoreply_command(self, cmd: str):
+        """Handle /autoreply — enable, disable, or show auto-reply status."""
+        from agent.autoreply import parse_autoreply_args, format_status
+
+        args = cmd.split(None, 1)[1].strip() if len(cmd.split(None, 1)) > 1 else ""
+        action, new_config = parse_autoreply_args(args)
+
+        if action == "off":
+            if self._autoreply_config:
+                self._autoreply_config = None
+                _cprint("🔇 Auto-reply disabled.")
+            else:
+                _cprint("Auto-reply is not active.")
+        elif action.startswith("max:"):
+            n = int(action.split(":")[1])
+            if self._autoreply_config:
+                self._autoreply_config["max_turns"] = n
+                _cprint(f"🔄 Auto-reply max turns set to {n}.")
+            else:
+                _cprint("Auto-reply is not active. Use /autoreply <instructions> first.")
+        elif action.startswith("error:"):
+            _cprint(action[6:])
+        elif action == "status":
+            if self._autoreply_config:
+                _cprint("🔄 " + format_status(self._autoreply_config))
+            else:
+                _cprint("Auto-reply is not active. Use /autoreply <instructions> to enable.")
+        elif action == "enabled":
+            self._autoreply_config = new_config
+            mode = "literal mode " if new_config.get("literal") else ""
+            label = "Message" if new_config.get("literal") else "Prompt"
+            prompt_preview = new_config["prompt"][:80]
+            if len(new_config["prompt"]) > 80:
+                prompt_preview += "..."
+            limit = "forever" if new_config["max_turns"] == 0 else f"max {new_config['max_turns']} turns"
+            _cprint(f"🔄 Auto-reply enabled — {mode}({limit}).")
+            _cprint(f"  {label}: {prompt_preview}")
+            _cprint(f"  Send a message to start the loop. Use /autoreply off to stop.")
+
+    def _generate_autoreply_text(self) -> Optional[str]:
+        """Generate the next auto-reply text, or None if done."""
+        from agent.autoreply import check_and_advance, build_autoreply_messages
+
+        config = self._autoreply_config
+        if not config:
+            return None
+
+        text, cap_reached = check_and_advance(config)
+        if cap_reached:
+            self._autoreply_config = None
+            _cprint(f"\n{_DIM}[Auto-reply limit reached. Use /autoreply to re-enable.]{_RST}")
+            return None
+        if text:
+            return text
+
+        # LLM-generated: build prompt from conversation history and call sync LLM
+        from agent.auxiliary_client import call_llm
+
+        messages = build_autoreply_messages(config, self.conversation_history or [])
+        call_kwargs = {
+            "task": "autoreply",
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 1024,
+        }
+        if config.get("model"):
+            call_kwargs["model"] = config["model"]
+
+        response = call_llm(**call_kwargs)
+        reply_text = response.choices[0].message.content.strip()
+        config["turn_count"] += 1
+        return reply_text
+
     def _handle_background_command(self, cmd: str):
         """Handle /background <prompt> — run a prompt in a separate background session.
 
@@ -4802,16 +4882,36 @@ class HermesCLI:
                         n = len(submit_images)
                         _cprint(f"  {_DIM}📎 {n} image{'s' if n > 1 else ''} attached{_RST}")
 
+                    # Real user messages reset auto-reply turn counter
+                    if self._autoreply_config and not user_input.startswith("[autoreply]"):
+                        self._autoreply_config["turn_count"] = 0
+                    # Strip the autoreply prefix before sending to agent
+                    if isinstance(user_input, str) and user_input.startswith("[autoreply]"):
+                        user_input = user_input[len("[autoreply]"):]
+
                     # Regular chat - run agent
                     self._agent_running = True
                     app.invalidate()  # Refresh status line
-                    
+
                     try:
                         self.chat(user_input, images=submit_images or None)
                     finally:
                         self._agent_running = False
                         self._spinner_text = ""
                         app.invalidate()  # Refresh status line
+
+                    # Auto-reply: generate and inject the next message
+                    if self._autoreply_config:
+                        try:
+                            reply = self._generate_autoreply_text()
+                            if reply:
+                                cfg = self._autoreply_config
+                                turn = cfg["turn_count"] if cfg else "?"
+                                max_t = cfg["max_turns"] if cfg else "?"
+                                _cprint(f"\n{_DIM}[Auto-reply {turn}/{max_t}]{_RST}")
+                                self._pending_input.put(f"[autoreply]{reply}")
+                        except Exception as e:
+                            _cprint(f"\n{_DIM}[Auto-reply failed: {e}]{_RST}")
                     
                 except Exception as e:
                     print(f"Error: {e}")

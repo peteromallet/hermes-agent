@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import signal
+import time
 import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -272,6 +273,10 @@ class GatewayRunner:
         # Event hook system
         from gateway.hooks import HookRegistry
         self.hooks = HookRegistry()
+
+        # Auto-reply configs per session (ephemeral, in-memory only)
+        # Key: session_key, Value: {"prompt": str, "model": str|None, "max_turns": int, "turn_count": int}
+        self._autoreply_configs: Dict[str, Dict[str, Any]] = {}
 
     def _get_or_create_gateway_honcho(self, session_key: str):
         """Return a persistent Honcho manager/config pair for this gateway session."""
@@ -930,7 +935,7 @@ class GatewayRunner:
                           "personality", "retry", "undo", "sethome", "set-home",
                           "compress", "usage", "insights", "reload-mcp", "reload_mcp",
                           "update", "title", "resume", "provider", "rollback",
-                          "background", "reasoning"}
+                          "background", "reasoning", "autoreply"}
         if command and command in _known_commands:
             await self.hooks.emit(f"command:{command}", {
                 "platform": source.platform.value if source.platform else "",
@@ -998,7 +1003,10 @@ class GatewayRunner:
 
         if command == "reasoning":
             return await self._handle_reasoning_command(event)
-        
+
+        if command == "autoreply":
+            return await self._handle_autoreply_command(event)
+
         # User-defined quick commands (bypass agent loop, no LLM call)
         if command:
             quick_commands = self.config.get("quick_commands", {})
@@ -1068,7 +1076,7 @@ class GatewayRunner:
         # Get or create session
         session_entry = self.session_store.get_or_create_session(source)
         session_key = session_entry.session_key
-        
+
         # Emit session:start for new or auto-reset sessions
         _is_new_session = (
             session_entry.created_at == session_entry.updated_at
@@ -1425,6 +1433,12 @@ class GatewayRunner:
                     )
                 message_text = f"{context_note}\n\n{message_text}"
 
+        # Real user messages reset auto-reply turn counter;
+        # auto-reply messages (injected by _process_autoreply) do not.
+        is_autoreply = (event.message_id or "").startswith("autoreply-")
+        if session_key in self._autoreply_configs and not is_autoreply:
+            self._autoreply_configs[session_key]["turn_count"] = 0
+
         try:
             # Emit agent:start hook
             hook_ctx = {
@@ -1434,7 +1448,7 @@ class GatewayRunner:
                 "message": message_text[:500],
             }
             await self.hooks.emit("agent:start", hook_ctx)
-            
+
             # Run the agent
             agent_result = await self._run_agent(
                 message=message_text,
@@ -1552,7 +1566,22 @@ class GatewayRunner:
                 session_entry.session_key,
                 last_prompt_tokens=agent_result.get("last_prompt_tokens", 0),
             )
-            
+
+            # Auto-reply: label the response and schedule next auto-reply
+            if is_autoreply and response:
+                ar_config = self._autoreply_configs.get(session_key)
+                if ar_config:
+                    cap = "∞" if ar_config["max_turns"] == 0 else ar_config["max_turns"]
+                    response = (
+                        f"**[Auto-reply {ar_config['turn_count']}/{cap}]:** "
+                        f"{event.text}\n\n---\n\n{response}"
+                    )
+
+            if session_key in self._autoreply_configs:
+                asyncio.create_task(
+                    self._process_autoreply(source, session_key, session_entry.session_id)
+                )
+
             return response
             
         except Exception:
@@ -1583,7 +1612,8 @@ class GatewayRunner:
             logger.debug("Gateway memory flush on reset failed: %s", e)
 
         self._shutdown_gateway_honcho(session_key)
-        
+        self._autoreply_configs.pop(session_key, None)
+
         # Reset the session
         new_entry = self.session_store.reset_session(session_key)
         
@@ -1632,10 +1662,16 @@ class GatewayRunner:
         session_entry = self.session_store.get_or_create_session(source)
         session_key = session_entry.session_key
         
+        was_autoreply = self._autoreply_configs.pop(session_key, None)
         if session_key in self._running_agents:
             agent = self._running_agents[session_key]
             agent.interrupt()
-            return "⚡ Stopping the current task... The agent will finish its current step and respond."
+            msg = "⚡ Stopping the current task... The agent will finish its current step and respond."
+            if was_autoreply:
+                msg += "\n🔇 Auto-reply disabled."
+            return msg
+        elif was_autoreply:
+            return "🔇 Auto-reply disabled."
         else:
             return "No active task to stop."
     
@@ -1661,6 +1697,7 @@ class GatewayRunner:
             "`/reasoning [level|show|hide]` — Set reasoning effort or toggle display",
             "`/rollback [number]` — List or restore filesystem checkpoints",
             "`/background <prompt>` — Run a prompt in a separate background session",
+            "`/autoreply <instructions>` — Enable auto-reply loop with meta-prompt",
             "`/reload-mcp` — Reload MCP servers from config",
             "`/update` — Update Hermes Agent to the latest version",
             "`/help` — Show this message",
@@ -1945,7 +1982,120 @@ class GatewayRunner:
 
         available = "`none`, " + ", ".join(f"`{n}`" for n in personalities.keys())
         return f"Unknown personality: `{args}`\n\nAvailable: {available}"
-    
+
+    async def _handle_autoreply_command(self, event: MessageEvent) -> str:
+        """Handle /autoreply command — enable, disable, or show auto-reply status."""
+        from agent.autoreply import parse_autoreply_args, format_status
+
+        source = event.source
+        session_key = build_session_key(source)
+        args = event.get_command_args().strip()
+
+        action, new_config = parse_autoreply_args(args)
+
+        if action == "off":
+            if self._autoreply_configs.pop(session_key, None):
+                return "🔇 Auto-reply disabled."
+            return "Auto-reply is not active."
+
+        if action.startswith("max:"):
+            n = int(action.split(":")[1])
+            cfg = self._autoreply_configs.get(session_key)
+            if cfg:
+                cfg["max_turns"] = n
+                return f"🔄 Auto-reply max turns set to **{n}**."
+            return "Auto-reply is not active. Use `/autoreply <instructions>` first."
+
+        if action.startswith("error:"):
+            return action[6:]
+
+        if action == "status":
+            cfg = self._autoreply_configs.get(session_key)
+            if cfg:
+                return "🔄 " + format_status(cfg)
+            return "Auto-reply is not active. Use `/autoreply <instructions>` to enable."
+
+        # action == "enabled"
+        self._autoreply_configs[session_key] = new_config
+        mode = "literal mode " if new_config.get("literal") else ""
+        label = "Message" if new_config.get("literal") else "Prompt"
+        max_t = new_config["max_turns"]
+        prompt_preview = new_config["prompt"][:100]
+        if len(new_config["prompt"]) > 100:
+            prompt_preview += "..."
+        return (
+            f"🔄 Auto-reply enabled — {mode}({'forever' if max_t == 0 else f'max {max_t} turns'}).\n"
+            f"**{label}:** {prompt_preview}\n\n"
+            f"_Send a message to start the loop. Use `/autoreply off` to stop._"
+        )
+
+    async def _generate_autoreply(self, session_key: str, session_id: str):
+        """Generate an auto-reply using the auxiliary LLM client.
+
+        Returns (reply_text, cap_reached).  reply_text is None when
+        auto-reply is inactive or the turn cap was just hit.
+        """
+        from agent.autoreply import check_and_advance, build_autoreply_messages
+
+        config = self._autoreply_configs.get(session_key)
+        if not config:
+            return None, False
+
+        text, cap_reached = check_and_advance(config)
+        if cap_reached:
+            del self._autoreply_configs[session_key]
+            return None, True
+        if text:
+            return text, False
+
+        # LLM-generated: build prompt from transcript and call async LLM
+        history = self.session_store.load_transcript(session_id)
+        messages = build_autoreply_messages(config, history)
+
+        from agent.auxiliary_client import async_call_llm
+        call_kwargs = {
+            "task": "autoreply",
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 1024,
+        }
+        if config.get("model"):
+            call_kwargs["model"] = config["model"]
+
+        response = await async_call_llm(**call_kwargs)
+        reply_text = response.choices[0].message.content.strip()
+        config["turn_count"] += 1
+        return reply_text, False
+
+    async def _process_autoreply(self, source, session_key: str, session_id: str):
+        """Fire-and-forget task: generate an auto-reply and inject it via the adapter."""
+        try:
+            adapter = self.adapters.get(source.platform)
+            if not adapter:
+                return
+
+            autoreply_text, cap_reached = await self._generate_autoreply(
+                session_key, session_id)
+
+            if not autoreply_text:
+                if cap_reached:
+                    metadata = {"thread_id": source.thread_id} if source.thread_id else None
+                    await adapter.send(
+                        chat_id=source.chat_id,
+                        content="_[Auto-reply limit reached. Use `/autoreply` to re-enable.]_",
+                        metadata=metadata,
+                    )
+                return
+
+            synthetic_event = MessageEvent(
+                text=autoreply_text,
+                source=source,
+                message_id=f"autoreply-{time.time()}",
+            )
+            await adapter.handle_message(synthetic_event)
+        except Exception as e:
+            logger.error("[AutoReply] Failed: %s", e)
+
     async def _handle_retry_command(self, event: MessageEvent) -> str:
         """Handle /retry command - re-send the last user message."""
         source = event.source
