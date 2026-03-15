@@ -130,7 +130,7 @@ def test_compact_handler_uses_compress_context_cached_prompt():
         {"role": "user", "content": "how are you"},
         {"role": "assistant", "content": "good"},
     ]
-    agent._handle_ctrl_compact(messages, "sys msg", task_id="default")
+    agent._ctrl_compact(messages, "sys msg", task_id="default")
 
     assert messages == compressed_messages
     assert agent._cached_system_prompt == new_prompt

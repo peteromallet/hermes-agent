@@ -353,11 +353,11 @@ class AIAgent:
         self._control_queue = collections.deque()
         self._control_lock = threading.Lock()
         self._control_handlers = {
-            "switch_model": {"fn": self._handle_ctrl_switch_model, "immediate": True},
-            "compact_context": {"fn": self._handle_ctrl_compact},
-            "interrupt": {"fn": self._handle_ctrl_interrupt, "immediate": True},
-            "get_status": {"fn": self._handle_ctrl_get_status, "immediate": True},
-            "flush_memories": {"fn": self._handle_ctrl_flush_memories},
+            "switch_model":    {"fn": self._ctrl_switch_model, "immediate": True},
+            "compact_context": {"fn": self._ctrl_compact},
+            "interrupt":       {"fn": self._ctrl_interrupt, "immediate": True},
+            "get_status":      {"fn": self._ctrl_get_status, "immediate": True},
+            "flush_memories":  {"fn": self._ctrl_flush_memories},
         }
         
         # Subagent delegation state
@@ -2793,34 +2793,28 @@ class AIAgent:
             else:
                 logging.warning("Unknown control command: %s", name)
 
-    def _handle_ctrl_switch_model(self, provider: str, model: str, **_):
-        """Control handler: switch model. Immediate — safe to call from any thread.
-        Returns None because _switch_model prints its own notification."""
+    # ── Control command implementations ──
+    # Convention: return a notification string, or None if the method prints its own.
+    # All accept **_ to ignore extra kwargs from the JSON dispatch.
+
+    def _ctrl_switch_model(self, provider: str, model: str, **_):
         self._switch_model(provider, model)
-        return None  # _switch_model already prints
+        return None  # _switch_model prints its own notification
 
-    def _handle_ctrl_interrupt(self, message: str = None, **_):
-        """Control handler: interrupt the agent loop. Immediate."""
+    def _ctrl_interrupt(self, message: str = None, **_):
         self.interrupt(message)
-        return None  # interrupt() already prints
+        return None  # interrupt() prints its own notification
 
-    def _handle_ctrl_get_status(self, **_):
-        """Control handler: return current agent status. Immediate."""
-        return (
-            f"model={self.provider}:{self.model} "
-            f"session={self.session_id} "
-            f"interrupted={self._interrupt_requested}"
-        )
+    def _ctrl_get_status(self, **_):
+        return f"model={self.provider}:{self.model} session={self.session_id} interrupted={self._interrupt_requested}"
 
-    def _handle_ctrl_flush_memories(self, messages: list = None, **_):
-        """Control handler: flush pending memories."""
+    def _ctrl_flush_memories(self, messages: list = None, **_):
         if not messages:
             return "Flush skipped: no messages in context yet"
         self.flush_memories(messages)
         return "Memories flushed"
 
-    def _handle_ctrl_compact(self, messages: list, system_message: str, task_id: str = "default", **_):
-        """Control handler: force context compaction."""
+    def _ctrl_compact(self, messages: list, system_message: str, task_id: str = "default", **_):
         if not messages:
             return "Compact skipped: no messages in context yet"
         n_before = len(messages)
