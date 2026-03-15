@@ -232,3 +232,31 @@
 **Good:** Fixes a real bug found during live testing. Two-line fix, clear cause and effect.
 
 **Bad:** This should have been caught in the original control queue commit (`8a7ce57`). The pre-loop drain was deliberately left argument-free with the rationale that "compact can't fire there (no messages passed)" — but that reasoning was wrong once the queue became externally accessible. External callers can queue compact at any time.
+
+---
+
+## `65eb67f` — feat: add interrupt, get_status, flush_memories control commands
+
+**What it does:** Registers three more control handlers: `interrupt` (break agent loop, immediate), `get_status` (return model/session/state, immediate), `flush_memories` (save pending memories, queued).
+
+**Good:** All three are useful for external tools. `interrupt` and `get_status` are correctly marked immediate since they don't need message context. `flush_memories` correctly queues because it needs the messages list.
+
+**Bad:** Nothing.
+
+---
+
+## `3166462` + `894f4a9` — refactor: flatten control queue structure
+
+**What these do:** Two commits that should have been one. `3166462` renamed `_handle_ctrl_*` → `_ctrl_*` and trimmed docstrings. `894f4a9` (2 minutes later) restructured the dispatch: merged `enqueue_control` into `execute_control`, replaced `_run_control_handler` with 3-line `_run_ctrl`, added a block comment documenting the convention.
+
+**Good (final state):**
+- Call chain is now: `execute_control` → `_run_ctrl` → `_ctrl_*` → actual method. Clean.
+- Single entry point (`execute_control`) for both immediate and deferred.
+- `_drain_control_queue` builds a `ctx` dict for loop context instead of threading 3 kwargs through every call.
+- Convention is documented in one block comment rather than repeated per-handler.
+
+**Bad:**
+- Two commits for one logical change. `3166462` was immediately superseded.
+- The control system had been restructured ~4 times across the session (handler dict → external flag → immediate flag → notification wrapper → flatten). The final state is good but took too many iterations to get there.
+
+**Action taken:** None — final state is clean.
