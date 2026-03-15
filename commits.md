@@ -138,3 +138,16 @@
 - Test file has an ugly `importlib.util.spec_from_file_location` workaround because `gateway/__init__.py` has a broken import (`SessionResetPolicy`). This is a pre-existing issue — all gateway tests are currently broken by it. Acceptable workaround.
 
 **Action taken:** Fixed client `switch_model()` to keep using `/switch-model`. Committed.
+
+---
+
+## `e642132` — refactor: add external flag to control handlers, decouple API from internals
+
+**What it does:** Changes `_control_handlers` from `{name: fn}` to `{name: {fn, external}}`. Adds `external_control_commands` property. API validates against that property instead of reading the internal handler dict directly.
+
+**Good:**
+- Clean separation: internal commands (e.g. future `_reset_state`) can be enqueued by code but aren't reachable via HTTP.
+- API layer no longer coupled to `_control_handlers` structure — only sees the property.
+- Adding a new command is still just one dict entry; the `external` flag is the only new thing to think about.
+
+**Bad:** Nothing. Minimal change, solves a real extensibility concern.
