@@ -151,3 +151,64 @@
 - Adding a new command is still just one dict entry; the `external` flag is the only new thing to think about.
 
 **Bad:** Nothing. Minimal change, solves a real extensibility concern.
+
+---
+
+## `01501f7` — feat: gate control API behind HERMES_CONTROL_API env var
+
+**What it does:** Wraps the control API startup in the gateway behind `HERMES_CONTROL_API=true` env var check. Adds documentation to `.env.example`.
+
+**Good:** Follows the codebase convention where new features are env-var-gated. Off by default is the right call for a new HTTP surface. The CLI path (`cli.py:_start_control_api`) intentionally has no gate — it's always-on for single-user localhost use.
+
+**Bad:** Nothing.
+
+---
+
+## `1e565bb` — fix: repair broken gateway/__init__.py import
+
+**What it does:** Fixes `ImportError: cannot import name 'SessionResetPolicy' from 'gateway.session'` — it was moved to `gateway.config` but `__init__.py` still imported from `session`.
+
+**Good:** Root cause fix for a bug that was silently breaking the control API startup in CLI mode and all gateway test collection. One-line fix.
+
+**Bad:** This was a pre-existing bug from a prior commit that went unnoticed because the import failure was caught and silently swallowed.
+
+---
+
+## `b952888` through `0623073` — notification system iteration (4 commits)
+
+**What these do:** Iterative development of control handler notifications:
+1. `b952888` — Added `if not self.quiet_mode: print(...)` to handlers
+2. `1c6ff62` — Changed compact to always print (CLI sets `quiet_mode=True`)
+3. `be210b0` — Added `execute_control` for immediate execution, `switch_model` fires instantly
+4. `0623073` — Refactored to generic `_run_control_handler` wrapper with return-string convention
+
+**Good (final state):**
+- `execute_control` correctly splits immediate vs queued commands
+- Generic wrapper: handlers return a string → printed with `⚙️` prefix; return None → handler manages its own output
+- Compact handler does early-exit checks with clear messages before calling `_compress_context`
+
+**Bad:**
+- 4 commits for what should have been 1. The approach changed 3 times.
+- `_switch_model` prints its own notification (line 2709), so the handler returns `None` to avoid double-printing. This means the notification convention is split: some handlers use the wrapper, others have legacy print statements. Acceptable for now but the wrapper convention should win long-term.
+
+**Action taken:** None — final state is clean. The commit churn is cosmetic.
+
+---
+
+## `11631a7` — refactor: default control handlers to externally visible
+
+**What it does:** Flips `external_control_commands` to default-True — all handlers exposed unless `external=False`.
+
+**Good:** Correct design call. The env var is the master gate; per-handler opt-out is the escape hatch, not the default.
+
+**Bad:** This immediately superseded `e642132` (which added `external` as opt-in). Should have been one commit.
+
+---
+
+## `d198830` — fix: get_session endpoint supports _any session resolution
+
+**What it does:** Changes `_resolve_agent` to return `(key, agent)` tuple. Updates `get_session` endpoint to use it.
+
+**Good:** Fixes a real bug where `GET /sessions/_any` returned 404 because `get_session` did a raw dict lookup.
+
+**Bad:** The tuple return is slightly awkward — callers must unpack even when they don't need the resolved key. But it's 3 callers and the alternative (separate method) is worse.

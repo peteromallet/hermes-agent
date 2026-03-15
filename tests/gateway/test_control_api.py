@@ -1,29 +1,11 @@
 """Tests for the control API command validation and compact handler."""
 
-import asyncio
-import importlib.util
 import json
-import os
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Load control_api directly from file to avoid broken gateway/__init__.py
-_spec = importlib.util.spec_from_file_location(
-    "gateway.control_api",
-    os.path.join(os.path.dirname(__file__), "..", "..", "gateway", "control_api.py"),
-    submodule_search_locations=[],
-)
-_mod = importlib.util.module_from_spec(_spec)
-if "gateway" not in sys.modules:
-    _pkg = types.ModuleType("gateway")
-    _pkg.__path__ = [os.path.join(os.path.dirname(__file__), "..", "..", "gateway")]
-    sys.modules["gateway"] = _pkg
-sys.modules["gateway.control_api"] = _mod
-_spec.loader.exec_module(_mod)
-ControlAPI = _mod.ControlAPI
+from gateway.control_api import ControlAPI
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

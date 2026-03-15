@@ -2801,9 +2801,8 @@ class AIAgent:
         if not messages:
             return "Compact skipped: no messages in context yet"
         n_before = len(messages)
-        min_needed = (getattr(self, 'context_compressor', None)
-                      and self.context_compressor.protect_first_n
-                      + self.context_compressor.protect_last_n + 1) or 7
+        cc = getattr(self, 'context_compressor', None)
+        min_needed = (cc.protect_first_n + cc.protect_last_n + 1) if cc else 7
         if n_before <= min_needed:
             return f"Compact skipped: only {n_before} messages (need >{min_needed})"
         compressed, _ = self._compress_context(messages, system_message, task_id=task_id)
