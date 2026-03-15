@@ -3805,13 +3805,15 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         return False
 
     # Start local-only control API for external tools (e.g., desloppify)
+    # Opt-in via HERMES_CONTROL_API=true (new HTTP surface, off by default)
     control_api = None
-    try:
-        from gateway.control_api import ControlAPI
-        control_api = ControlAPI(runner)
-        await control_api.start()
-    except Exception as e:
-        logger.warning("Control API failed to start (non-fatal): %s", e)
+    if os.getenv("HERMES_CONTROL_API", "").lower() in ("1", "true", "yes"):
+        try:
+            from gateway.control_api import ControlAPI
+            control_api = ControlAPI(runner)
+            await control_api.start()
+        except Exception as e:
+            logger.warning("Control API failed to start (non-fatal): %s", e)
     
     # Write PID file so CLI can detect gateway is running
     import atexit
