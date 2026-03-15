@@ -127,6 +127,11 @@ def test_compact_handler_uses_compress_context_cached_prompt():
     agent = object.__new__(AIAgent)
     agent._cached_system_prompt = "old prompt"
     agent.quiet_mode = True
+    agent.log_prefix = ""
+    # Fake compressor with enough room to compress
+    agent.context_compressor = MagicMock()
+    agent.context_compressor.protect_first_n = 1
+    agent.context_compressor.protect_last_n = 1
 
     compressed_messages = [{"role": "user", "content": "summarized"}]
     new_prompt = "new system prompt from compress"
@@ -137,7 +142,12 @@ def test_compact_handler_uses_compress_context_cached_prompt():
 
     agent._compress_context = fake_compress
 
-    messages = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": "how are you"},
+        {"role": "assistant", "content": "good"},
+    ]
     agent._handle_ctrl_compact(messages, "sys msg", task_id="default")
 
     assert messages == compressed_messages

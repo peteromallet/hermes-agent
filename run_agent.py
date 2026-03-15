@@ -2788,14 +2788,19 @@ class AIAgent:
     def _handle_ctrl_compact(self, messages: list, system_message: str, task_id: str = "default", **_):
         """Control handler: force context compaction."""
         if not messages:
-            logging.warning("compact_context: no messages available")
+            print(f"{self.log_prefix}📦 Compact skipped: no messages in context yet")
             return
         n_before = len(messages)
+        min_needed = (getattr(self, 'context_compressor', None)
+                      and self.context_compressor.protect_first_n
+                      + self.context_compressor.protect_last_n + 1) or 7
+        if n_before <= min_needed:
+            print(f"{self.log_prefix}📦 Compact skipped: only {n_before} messages (need >{min_needed})")
+            return
         compressed, _ = self._compress_context(messages, system_message, task_id=task_id)
         messages.clear()
         messages.extend(compressed)
-        if not self.quiet_mode:
-            print(f"\n📦 Context compacted: {n_before} → {len(messages)} messages")
+        print(f"{self.log_prefix}📦 Context compacted: {n_before} → {len(messages)} messages")
 
     # ── End provider fallback ──────────────────────────────────────────────
 
