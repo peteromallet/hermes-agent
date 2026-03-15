@@ -347,11 +347,13 @@ class AIAgent:
 
         # Control queue — external callers (control API, desloppify) enqueue
         # commands; the agent loop drains them at safe points between iterations.
+        # Handlers marked external=True are exposed via the HTTP control API;
+        # internal-only handlers can only be triggered by direct enqueue_control calls.
         self._control_queue = collections.deque()
         self._control_lock = threading.Lock()
         self._control_handlers = {
-            "switch_model": self._handle_ctrl_switch_model,
-            "compact_context": self._handle_ctrl_compact,
+            "switch_model": {"fn": self._handle_ctrl_switch_model, "external": True},
+            "compact_context": {"fn": self._handle_ctrl_compact, "external": True},
         }
         
         # Subagent delegation state
@@ -2727,23 +2729,33 @@ class AIAgent:
 
     # ── Control queue ─────────────────────────────────────────────────────
 
+    @property
+    def external_control_commands(self) -> list[str]:
+        """Command names exposed via the HTTP control API."""
+        return [name for name, entry in self._control_handlers.items() if entry.get("external")]
+
     def enqueue_control(self, command: str, **params):
         """Queue a control command from any thread."""
         with self._control_lock:
             self._control_queue.append({"command": command, **params})
 
     def _drain_control_queue(self, messages: list = None, system_message: str = None, task_id: str = "default"):
-        """Process queued commands. Called between loop iterations."""
+        """Process queued commands. Called between loop iterations.
+
+        messages/system_message/task_id are loop context passed to handlers
+        that need them (e.g. compact).  Handlers that don't need context
+        simply ignore them via **_.
+        """
         with self._control_lock:
             pending = list(self._control_queue)
             self._control_queue.clear()
         for cmd in pending:
             name = cmd.get("command")
-            handler = self._control_handlers.get(name)
-            if handler:
+            entry = self._control_handlers.get(name)
+            if entry:
                 params = {k: v for k, v in cmd.items() if k != "command"}
                 try:
-                    handler(messages=messages, system_message=system_message, task_id=task_id, **params)
+                    entry["fn"](messages=messages, system_message=system_message, task_id=task_id, **params)
                 except Exception as e:
                     logging.error("Control command '%s' failed: %s", name, e)
             else:

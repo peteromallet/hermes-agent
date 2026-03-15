@@ -157,9 +157,9 @@ class ControlAPI:
         if agent is None:
             return _json_response({"error": f"No running agent for '{key}'"}, status=404)
 
-        # Validate command name before enqueuing
-        if not hasattr(agent, '_control_handlers') or command not in agent._control_handlers:
-            available = list(agent._control_handlers.keys()) if hasattr(agent, '_control_handlers') else []
+        # Validate against externally-exposed commands only
+        available = getattr(agent, 'external_control_commands', [])
+        if command not in available:
             return _json_response(
                 {"error": f"Unknown command: '{command}'", "available": available},
                 status=400,

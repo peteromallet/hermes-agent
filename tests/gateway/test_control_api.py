@@ -33,10 +33,7 @@ def _make_control_api():
     """Create a ControlAPI with a mock runner and a fake agent."""
     runner = MagicMock()
     agent = MagicMock()
-    agent._control_handlers = {
-        "switch_model": MagicMock(),
-        "compact_context": MagicMock(),
-    }
+    agent.external_control_commands = ["switch_model", "compact_context"]
     runner._running_agents = {"sess1": agent}
     api = ControlAPI(runner)
     return api, agent
@@ -97,6 +94,26 @@ async def test_control_valid_command_with_params():
     agent.enqueue_control.assert_called_once_with(
         "switch_model", provider="anthropic", model="claude-sonnet-4-6",
     )
+
+
+@pytest.mark.asyncio
+async def test_control_internal_command_rejected():
+    """Internal-only commands should not be accessible via the HTTP API."""
+    runner = MagicMock()
+    agent = MagicMock()
+    # Only switch_model is external; _internal_reset is not
+    agent.external_control_commands = ["switch_model"]
+    runner._running_agents = {"sess1": agent}
+    api = ControlAPI(runner)
+
+    request = _make_request("sess1", {"command": "_internal_reset"})
+    resp = await api.control(request)
+
+    assert resp.status == 400
+    body = json.loads(resp.text)
+    assert "_internal_reset" in body["error"]
+    assert "switch_model" in body["available"]
+    agent.enqueue_control.assert_not_called()
 
 
 # ── Compact handler tests ───────────────────────────────────────────────
