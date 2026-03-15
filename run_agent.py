@@ -2740,6 +2740,16 @@ class AIAgent:
         with self._control_lock:
             self._control_queue.append({"command": command, **params})
 
+    def _run_control_handler(self, command: str, entry: dict, **params):
+        """Run a handler and emit a notification.
+
+        Convention: handlers return a string → printed as notification.
+        Return None if the handler prints its own output (e.g. _switch_model).
+        """
+        result = entry["fn"](**params)
+        if result is not None:
+            print(f"{self.log_prefix}⚙️  {result}")
+
     def execute_control(self, command: str, **params) -> dict:
         """Execute a control command immediately (for immediate-capable handlers).
 
@@ -2752,7 +2762,7 @@ class AIAgent:
             self.enqueue_control(command, **params)
             return {"success": True, "queued": True, "message": f"'{command}' queued — will apply on next turn"}
         try:
-            entry["fn"](**params)
+            self._run_control_handler(command, entry, **params)
             return {"success": True, "message": f"'{command}' executed"}
         except Exception as e:
             logging.error("Control command '%s' failed: %s", command, e)
@@ -2774,32 +2784,32 @@ class AIAgent:
             if entry:
                 params = {k: v for k, v in cmd.items() if k != "command"}
                 try:
-                    entry["fn"](messages=messages, system_message=system_message, task_id=task_id, **params)
+                    self._run_control_handler(name, entry, messages=messages, system_message=system_message, task_id=task_id, **params)
                 except Exception as e:
                     logging.error("Control command '%s' failed: %s", name, e)
             else:
                 logging.warning("Unknown control command: %s", name)
 
     def _handle_ctrl_switch_model(self, provider: str, model: str, **_):
-        """Control handler: switch model. Immediate — safe to call from any thread."""
+        """Control handler: switch model. Immediate — safe to call from any thread.
+        Returns None because _switch_model prints its own notification."""
         self._switch_model(provider, model)
+        return None  # _switch_model already prints
 
     def _handle_ctrl_compact(self, messages: list, system_message: str, task_id: str = "default", **_):
         """Control handler: force context compaction."""
         if not messages:
-            print(f"{self.log_prefix}📦 Compact skipped: no messages in context yet")
-            return
+            return "Compact skipped: no messages in context yet"
         n_before = len(messages)
         min_needed = (getattr(self, 'context_compressor', None)
                       and self.context_compressor.protect_first_n
                       + self.context_compressor.protect_last_n + 1) or 7
         if n_before <= min_needed:
-            print(f"{self.log_prefix}📦 Compact skipped: only {n_before} messages (need >{min_needed})")
-            return
+            return f"Compact skipped: only {n_before} messages (need >{min_needed})"
         compressed, _ = self._compress_context(messages, system_message, task_id=task_id)
         messages.clear()
         messages.extend(compressed)
-        print(f"{self.log_prefix}📦 Context compacted: {n_before} → {len(messages)} messages")
+        return f"Context compacted: {n_before} → {len(messages)} messages"
 
     # ── End provider fallback ──────────────────────────────────────────────
 
