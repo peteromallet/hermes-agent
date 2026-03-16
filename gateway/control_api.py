@@ -36,7 +36,10 @@ AVAILABLE_COMMANDS = [
     {"command": "/status", "description": "Show session info"},
     {"command": "/model <provider:model>", "description": "Switch model"},
     {"command": "/personality <name>", "description": "Switch personality"},
-    {"command": "/autoreply <instructions>", "description": "Enable auto-reply loop"},
+    {"command": "/autoreply <prompt>", "description": "Enable auto-reply loop (LLM generates replies from your prompt)"},
+    {"command": "/autoreply --literal <message>", "description": "Enable auto-reply loop (sends exact message each turn)"},
+    {"command": "/autoreply --forever <prompt>", "description": "Auto-reply with no turn limit (default: 20)"},
+    {"command": "/autoreply --max N <prompt>", "description": "Auto-reply with custom turn limit"},
     {"command": "/autoreply off", "description": "Disable auto-reply loop"},
     {"command": "/reasoning <level>", "description": "Set reasoning effort"},
     {"command": "/rollback [number]", "description": "List or restore checkpoints"},
@@ -60,14 +63,33 @@ def _json_response(data: dict, status: int = 200) -> web.Response:
     )
 
 
+REQUIRED_HEADER = "X-Hermes-Control"
+
+
 class ControlAPI:
     """Lightweight control API that holds a reference to the GatewayRunner."""
 
     def __init__(self, gateway_runner):
         self.runner = gateway_runner
-        self.app = web.Application()
+        self.app = web.Application(middlewares=[self._require_header])
         self._setup_routes()
         self._site = None
+
+    @web.middleware
+    async def _require_header(self, request: web.Request, handler):
+        """Reject requests missing the X-Hermes-Control header.
+
+        This blocks browser-based CSRF attacks: any non-standard header
+        forces a CORS preflight, which fails because we don't serve
+        Access-Control-Allow-* headers.  Non-browser callers just add
+        the header.
+        """
+        if request.headers.get(REQUIRED_HEADER) != "1":
+            return _json_response(
+                {"error": f"Missing required header: {REQUIRED_HEADER}: 1"},
+                status=403,
+            )
+        return await handler(request)
 
     def _setup_routes(self):
         self.app.router.add_get("/health", self.health)

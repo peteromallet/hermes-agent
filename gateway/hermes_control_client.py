@@ -55,11 +55,14 @@ class HermesControl:
     def _request(self, method: str, path: str, body: dict = None) -> dict:
         url = f"{self.base_url}{path}"
         data = json.dumps(body).encode() if body else None
+        headers = {"X-Hermes-Control": "1"}
+        if data:
+            headers["Content-Type"] = "application/json"
         req = urllib.request.Request(
             url,
             data=data,
             method=method,
-            headers={"Content-Type": "application/json"} if data else {},
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:

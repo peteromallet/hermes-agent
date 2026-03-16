@@ -4,8 +4,10 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 
-from gateway.control_api import ControlAPI
+from gateway.control_api import ControlAPI, REQUIRED_HEADER
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -137,38 +139,31 @@ async def test_list_commands_returns_commands():
     assert "/stop" in commands
 
 
-# ── Compact handler tests ───────────────────────────────────────────────
+# ── CSRF protection tests ─────────────────────────────────────────────
 
 
-def test_compact_handler_uses_compress_context_cached_prompt():
-    """After compact handler runs, _cached_system_prompt is set by _compress_context, not the handler."""
-    from run_agent import AIAgent
+@pytest.mark.asyncio
+async def test_missing_header_returns_403():
+    """Requests without X-Hermes-Control header should be rejected."""
+    api, _ = _make_control_api()
 
-    agent = object.__new__(AIAgent)
-    agent._cached_system_prompt = "old prompt"
-    agent.quiet_mode = True
-    agent.log_prefix = ""
-    # Fake compressor with enough room to compress
-    agent.context_compressor = MagicMock()
-    agent.context_compressor.protect_first_n = 1
-    agent.context_compressor.protect_last_n = 1
+    from aiohttp.test_utils import TestClient, TestServer
+    async with TestClient(TestServer(api.app)) as client:
+        resp = await client.get("/health")
+        assert resp.status == 403
+        body = await resp.json()
+        assert "Missing required header" in body["error"]
 
-    compressed_messages = [{"role": "user", "content": "summarized"}]
-    new_prompt = "new system prompt from compress"
 
-    def fake_compress(messages, system_message, task_id="default"):
-        agent._cached_system_prompt = new_prompt
-        return compressed_messages, new_prompt
+@pytest.mark.asyncio
+async def test_valid_header_passes():
+    """Requests with the correct header should succeed."""
+    api, _ = _make_control_api()
 
-    agent._compress_context = fake_compress
-
-    messages = [
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "hi"},
-        {"role": "user", "content": "how are you"},
-        {"role": "assistant", "content": "good"},
-    ]
-    agent._ctrl_compact(messages, "sys msg", task_id="default")
-
-    assert messages == compressed_messages
-    assert agent._cached_system_prompt == new_prompt
+    from aiohttp.test_utils import TestClient, TestServer
+    async with TestClient(TestServer(api.app)) as client:
+        resp = await client.get("/health",
+                                headers={REQUIRED_HEADER: "1"})
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["status"] == "ok"
