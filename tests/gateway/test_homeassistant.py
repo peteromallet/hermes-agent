@@ -16,28 +16,28 @@ from gateway.config import (
 )
 from gateway.platforms.homeassistant import (
     HomeAssistantAdapter,
-    check_ha_requirements,
+    check_homeassistant_requirements,
 )
 
 
 # ---------------------------------------------------------------------------
-# check_ha_requirements
+# check_homeassistant_requirements
 # ---------------------------------------------------------------------------
 
 
 class TestCheckRequirements:
     def test_returns_false_without_token(self, monkeypatch):
         monkeypatch.delenv("HASS_TOKEN", raising=False)
-        assert check_ha_requirements() is False
+        assert check_homeassistant_requirements() is False
 
     def test_returns_true_with_token(self, monkeypatch):
         monkeypatch.setenv("HASS_TOKEN", "test-token")
-        assert check_ha_requirements() is True
+        assert check_homeassistant_requirements() is True
 
     @patch("gateway.platforms.homeassistant.AIOHTTP_AVAILABLE", False)
     def test_returns_false_without_aiohttp(self, monkeypatch):
         monkeypatch.setenv("HASS_TOKEN", "test-token")
-        assert check_ha_requirements() is False
+        assert check_homeassistant_requirements() is False
 
 
 # ---------------------------------------------------------------------------
