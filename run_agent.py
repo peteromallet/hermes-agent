@@ -21,7 +21,6 @@ Usage:
 """
 
 import atexit
-import collections
 import concurrent.futures
 import copy
 import hashlib
@@ -37,7 +36,7 @@ import threading
 import weakref
 from types import SimpleNamespace
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from openai import OpenAI
 import fire
 from datetime import datetime
@@ -81,7 +80,7 @@ from hermes_constants import OPENROUTER_BASE_URL
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
-    SWITCH_MODEL_GUIDANCE,
+    RUN_COMMAND_GUIDANCE,
 )
 from agent.model_metadata import (
     estimate_tokens_rough, estimate_messages_tokens_rough,
@@ -212,15 +211,15 @@ class AIAgent:
     
     def __init__(
         self,
-        base_url: str = None,
-        api_key: str = None,
-        provider: str = None,
-        api_mode: str = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        provider: Optional[str] = None,
+        api_mode: Optional[Literal["chat_completions", "codex_responses", "anthropic_messages"]] = None,
         model: str = "anthropic/claude-opus-4.6",  # OpenRouter format
         max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
         tool_delay: float = 1.0,
-        enabled_toolsets: List[str] = None,
-        disabled_toolsets: List[str] = None,
+        enabled_toolsets: Optional[List[str]] = None,
+        disabled_toolsets: Optional[List[str]] = None,
         save_trajectories: bool = False,
         verbose_logging: bool = False,
         quiet_mode: bool = False,
@@ -331,9 +330,6 @@ class AIAgent:
         else:
             self.api_mode = "chat_completions"
 
-        # Remember the original model for switch_model tool guidance
-        self._original_model = {"provider": self.provider, "model": self.model}
-
         self.tool_progress_callback = tool_progress_callback
         self.thinking_callback = thinking_callback
         self.reasoning_callback = reasoning_callback
@@ -345,21 +341,6 @@ class AIAgent:
         self._interrupt_requested = False
         self._interrupt_message = None  # Optional message that triggered interrupt
 
-        # Control queue — external callers (control API, desloppify) enqueue
-        # commands; the agent loop drains them at safe points between iterations.
-        # Handlers marked immediate=True execute in the caller's thread (no queuing);
-        # non-immediate handlers queue and drain when the agent loop is active.
-        # All handlers are exposed via the HTTP control API unless external=False.
-        self._control_queue = collections.deque()
-        self._control_lock = threading.Lock()
-        self._control_handlers = {
-            "switch_model":    {"fn": self._ctrl_switch_model, "immediate": True},
-            "compact_context": {"fn": self._ctrl_compact},
-            "interrupt":       {"fn": self._ctrl_interrupt, "immediate": True},
-            "get_status":      {"fn": self._ctrl_get_status, "immediate": True},
-            "flush_memories":  {"fn": self._ctrl_flush_memories},
-        }
-        
         # Subagent delegation state
         self._delegate_depth = 0        # 0 = top-level agent, incremented for children
         self._active_children = []      # Running child AIAgents (for interrupt propagation)
@@ -1717,10 +1698,8 @@ class AIAgent:
             tool_guidance.append(SESSION_SEARCH_GUIDANCE)
         if "skill_manage" in self.valid_tool_names:
             tool_guidance.append(SKILLS_GUIDANCE)
-        if "switch_model" in self.valid_tool_names:
-            tool_guidance.append(SWITCH_MODEL_GUIDANCE.format(
-                original_model=f"{self._original_model['provider']}:{self._original_model['model']}"
-            ))
+        if "run_command" in self.valid_tool_names:
+            tool_guidance.append(RUN_COMMAND_GUIDANCE)
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 
@@ -2682,146 +2661,6 @@ class AIAgent:
             logging.error("Failed to activate fallback model: %s", e)
             return False
 
-    # ── Explicit model switch (switch_model tool) ───────────────────────────
-
-    def _switch_model(self, provider: str, model: str) -> dict:
-        """Switch the active model/provider in-place.
-
-        Called by the switch_model tool.  Returns a result dict
-        (success/failure + current state).
-        """
-        provider = provider.strip().lower()
-        model = model.strip()
-
-        old_provider = self.provider
-        old_model = self.model
-
-        try:
-            from agent.auxiliary_client import resolve_provider_credentials
-            creds = resolve_provider_credentials(provider, model)
-            if creds is None:
-                return {
-                    "success": False,
-                    "error": f"Provider '{provider}' is not configured. "
-                             f"Set the appropriate API key or run 'hermes setup'.",
-                    "current": {"provider": old_provider, "model": old_model},
-                }
-
-            self._apply_provider_credentials(creds)
-
-            print(
-                f"{self.log_prefix}🔄 Model switched: "
-                f"{old_model} → {model} via {provider}"
-            )
-            logging.info(
-                "Model switched: %s → %s (%s)",
-                old_model, model, provider,
-            )
-            return {
-                "success": True,
-                "previous": {"provider": old_provider, "model": old_model},
-                "current": {"provider": provider, "model": model},
-                "message": "Model switched successfully",
-            }
-        except Exception as e:
-            logging.error("Failed to switch model: %s", e)
-            return {
-                "success": False,
-                "error": f"Failed to switch model: {e}",
-                "current": {"provider": old_provider, "model": old_model},
-            }
-
-    # ── Control queue ─────────────────────────────────────────────────────
-    #
-    # External callers (control API, desloppify) send commands via
-    # execute_control(). Immediate commands run in the caller's thread;
-    # deferred commands queue and drain at safe points in the agent loop.
-    #
-    # To add a command: add an entry to _control_handlers and a _ctrl_* method.
-    #   fn:        the method to call (receives **kwargs from JSON + loop context)
-    #   immediate: True = safe to call from any thread (no message context needed)
-    #   external:  False to hide from the HTTP API (default: True / exposed)
-    #
-    # Handler convention: return a notification string → printed with ⚙️ prefix.
-    # Return None if the handler prints its own output (e.g. _switch_model).
-
-    @property
-    def external_control_commands(self) -> list[str]:
-        return [name for name, entry in self._control_handlers.items()
-                if entry.get("external", True)]
-
-    def execute_control(self, command: str, **params) -> dict:
-        """Run a control command. Immediate commands execute now; others queue."""
-        entry = self._control_handlers.get(command)
-        if not entry:
-            return {"success": False, "error": f"Unknown command: '{command}'"}
-        if not entry.get("immediate"):
-            with self._control_lock:
-                self._control_queue.append({"command": command, **params})
-            return {"success": True, "queued": True,
-                    "message": f"'{command}' queued — will apply on next turn"}
-        try:
-            self._run_ctrl(entry["fn"], **params)
-            return {"success": True, "message": f"'{command}' executed"}
-        except Exception as e:
-            logging.error("Control command '%s' failed: %s", command, e)
-            return {"success": False, "error": str(e)}
-
-    def _drain_control_queue(self, messages: list = None,
-                             system_message: str = None, task_id: str = "default"):
-        """Process queued (deferred) commands. Called at safe points in the loop."""
-        with self._control_lock:
-            pending = list(self._control_queue)
-            self._control_queue.clear()
-        ctx = dict(messages=messages, system_message=system_message, task_id=task_id)
-        for cmd in pending:
-            name = cmd.get("command")
-            entry = self._control_handlers.get(name)
-            if not entry:
-                logging.warning("Unknown control command: %s", name)
-                continue
-            params = {k: v for k, v in cmd.items() if k != "command"}
-            try:
-                self._run_ctrl(entry["fn"], **ctx, **params)
-            except Exception as e:
-                logging.error("Control command '%s' failed: %s", name, e)
-
-    def _run_ctrl(self, fn, **kwargs):
-        """Call a handler and print its notification (if any)."""
-        result = fn(**kwargs)
-        if result is not None:
-            print(f"{self.log_prefix}⚙️  {result}")
-
-    # ── Control command implementations ──
-
-    def _ctrl_switch_model(self, provider: str, model: str, **_):
-        self._switch_model(provider, model)
-
-    def _ctrl_interrupt(self, message: str = None, **_):
-        self.interrupt(message)
-
-    def _ctrl_get_status(self, **_):
-        return f"model={self.provider}:{self.model} session={self.session_id} interrupted={self._interrupt_requested}"
-
-    def _ctrl_flush_memories(self, messages: list = None, **_):
-        if not messages:
-            return "Flush skipped: no messages in context yet"
-        self.flush_memories(messages)
-        return "Memories flushed"
-
-    def _ctrl_compact(self, messages: list, system_message: str, task_id: str = "default", **_):
-        if not messages:
-            return "Compact skipped: no messages in context yet"
-        n_before = len(messages)
-        cc = getattr(self, 'context_compressor', None)
-        min_needed = (cc.protect_first_n + cc.protect_last_n + 1) if cc else 7
-        if n_before <= min_needed:
-            return f"Compact skipped: only {n_before} messages (need >{min_needed})"
-        compressed, _ = self._compress_context(messages, system_message, task_id=task_id)
-        messages.clear()
-        messages.extend(compressed)
-        return f"Context compacted: {n_before} → {len(messages)} messages"
-
     # ── End provider fallback ──────────────────────────────────────────────
 
     def _build_api_kwargs(self, api_messages: list) -> dict:
@@ -3374,31 +3213,6 @@ class AIAgent:
                 provider=function_args.get("provider"),
                 parent_agent=self,
             )
-        elif function_name == "switch_model":
-            action = function_args.get("action", "list")
-            if action == "list":
-                from tools.switch_model_tool import switch_model_list
-                return switch_model_list(
-                    current_provider=self.provider,
-                    current_model=self.model,
-                    original=self._original_model,
-                )
-            else:
-                from tools.switch_model_tool import switch_model_switch
-                return switch_model_switch(
-                    provider=function_args.get("provider", ""),
-                    model=function_args.get("model", ""),
-                    reason=function_args.get("reason", ""),
-                    agent=self,
-                )
-        elif function_name == "smart_model":
-            from tools.smart_model_tool import smart_model_handle
-            return smart_model_handle(
-                agent=self,
-                preset=function_args.get("preset", "balanced"),
-                custom_provider=function_args.get("provider", ""),
-                custom_model=function_args.get("model", ""),
-            )
         else:
             return handle_function_call(
                 function_name, function_args, effective_task_id,
@@ -3426,7 +3240,7 @@ class AIAgent:
             return
 
         # ── State-mutating tools: force sequential to prevent races ──────
-        if any(tc.function.name in ("switch_model", "smart_model") for tc in tool_calls):
+        if any(tc.function.name == "run_command" for tc in tool_calls):
             return self._execute_tool_calls_sequential(
                 assistant_message, messages, effective_task_id, api_call_count
             )
@@ -4221,9 +4035,7 @@ class AIAgent:
                     if _preflight_tokens < self.context_compressor.threshold_tokens:
                         break  # Under threshold
 
-        # Drain any queued control commands before entering the loop
-        self._drain_control_queue(messages, system_message, effective_task_id)
-        active_system_prompt = self._cached_system_prompt  # pick up changes from compact
+        active_system_prompt = self._cached_system_prompt
 
         # Main conversation loop
         api_call_count = 0
@@ -4247,9 +4059,6 @@ class AIAgent:
                     print("\n⚡ Breaking out of tool loop due to interrupt...")
                 break
 
-            # Drain queued control commands (model switch, compaction, etc.)
-            self._drain_control_queue(messages, system_message, effective_task_id)
-            active_system_prompt = self._cached_system_prompt  # pick up changes from compact handler
 
             api_call_count += 1
             if not self.iteration_budget.consume():
