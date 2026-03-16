@@ -154,7 +154,7 @@ registry.register(
     schema=WEATHER_SCHEMA,
     handler=lambda args, **kw: weather_tool_async(args.get("location", "")),
     check_fn=check_weather_requirements,
-    is_async=True,  # registry calls _run_async() automatically
+    is_async=True,  # registry calls run_async() from tools.async_utils automatically
 )
 ```
 

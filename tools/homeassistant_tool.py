@@ -13,6 +13,7 @@ The HA instance URL is read from ``HASS_URL`` (default: http://homeassistant.loc
 import asyncio
 import json
 import logging
+from tools.async_utils import run_async
 import os
 import re
 from typing import Any, Dict, Optional
@@ -195,21 +196,7 @@ async def _async_call_service(
 # Sync wrappers (handler signature: (args, **kw) -> str)
 # ---------------------------------------------------------------------------
 
-def _run_async(coro):
-    """Run an async coroutine from a sync handler."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
 
-    if loop and loop.is_running():
-        # Already inside an event loop -- create a new thread
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, coro)
-            return future.result(timeout=30)
-    else:
-        return asyncio.run(coro)
 
 
 def _handle_list_entities(args: dict, **kw) -> str:
@@ -217,7 +204,7 @@ def _handle_list_entities(args: dict, **kw) -> str:
     domain = args.get("domain")
     area = args.get("area")
     try:
-        result = _run_async(_async_list_entities(domain=domain, area=area))
+        result = run_async(_async_list_entities(domain=domain, area=area))
         return json.dumps({"result": result})
     except Exception as e:
         logger.error("ha_list_entities error: %s", e)
@@ -232,7 +219,7 @@ def _handle_get_state(args: dict, **kw) -> str:
     if not _ENTITY_ID_RE.match(entity_id):
         return json.dumps({"error": f"Invalid entity_id format: {entity_id}"})
     try:
-        result = _run_async(_async_get_state(entity_id))
+        result = run_async(_async_get_state(entity_id))
         return json.dumps({"result": result})
     except Exception as e:
         logger.error("ha_get_state error: %s", e)
@@ -258,7 +245,7 @@ def _handle_call_service(args: dict, **kw) -> str:
 
     data = args.get("data")
     try:
-        result = _run_async(_async_call_service(domain, service, entity_id, data))
+        result = run_async(_async_call_service(domain, service, entity_id, data))
         return json.dumps({"result": result})
     except Exception as e:
         logger.error("ha_call_service error: %s", e)
@@ -307,7 +294,7 @@ def _handle_list_services(args: dict, **kw) -> str:
     """Handler for ha_list_services tool."""
     domain = args.get("domain")
     try:
-        result = _run_async(_async_list_services(domain=domain))
+        result = run_async(_async_list_services(domain=domain))
         return json.dumps({"result": result})
     except Exception as e:
         logger.error("ha_list_services error: %s", e)

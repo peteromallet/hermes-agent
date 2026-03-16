@@ -21,7 +21,6 @@ Public API (signatures preserved from the original 2,400-line version):
 """
 
 import json
-import asyncio
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -29,36 +28,6 @@ from tools.registry import registry
 from toolsets import resolve_toolset, validate_toolset
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Async Bridging  (single source of truth -- used by registry.dispatch too)
-# =============================================================================
-
-def _run_async(coro):
-    """Run an async coroutine from a sync context.
-
-    If the current thread already has a running event loop (e.g., inside
-    the gateway's async stack or Atropos's event loop), we spin up a
-    disposable thread so asyncio.run() can create its own loop without
-    conflicting.
-
-    This is the single source of truth for sync->async bridging in tool
-    handlers. The RL paths (agent_loop.py, tool_context.py) also provide
-    outer thread-pool wrapping as defense-in-depth, but each handler is
-    self-protecting via this function.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, coro)
-            return future.result(timeout=300)
-    return asyncio.run(coro)
 
 
 # =============================================================================

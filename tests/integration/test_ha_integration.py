@@ -154,7 +154,7 @@ class TestToolRest:
     """Call the async tool functions directly against the fake server.
 
     Note: we call ``_async_*`` instead of the sync ``_handle_*`` wrappers
-    because the sync wrappers use ``_run_async`` which blocks the event
+    because the sync wrappers use ``run_async`` from tools.async_utils which blocks the event
     loop, deadlocking with the in-process fake server.  The async functions
     are the real logic; the sync wrappers are trivial bridge code already
     covered by unit tests.

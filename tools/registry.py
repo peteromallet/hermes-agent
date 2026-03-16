@@ -112,8 +112,9 @@ class ToolRegistry:
     def dispatch(self, name: str, args: dict, **kwargs) -> str:
         """Execute a tool handler by name.
 
-        * Async handlers are bridged automatically via ``_run_async()``.
-        * All exceptions are caught and returned as ``{"error": "..."}``
+        * Async handlers are bridged automatically via ``run_async()`` from
+          tools.async_utils.
+        * All exceptions are caught and returned as ``{\"error\": \"...\"}``
           for consistent error format.
         """
         entry = self._tools.get(name)
@@ -121,8 +122,8 @@ class ToolRegistry:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:
             if entry.is_async:
-                from model_tools import _run_async
-                return _run_async(entry.handler(args, **kwargs))
+                from tools.async_utils import run_async
+                return run_async(entry.handler(args, **kwargs))
             return entry.handler(args, **kwargs)
         except Exception as e:
             logger.exception("Tool %s dispatch error: %s", name, e)

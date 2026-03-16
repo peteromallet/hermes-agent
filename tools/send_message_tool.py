@@ -144,8 +144,8 @@ def _handle_send(args):
             })
 
     try:
-        from model_tools import _run_async
-        result = _run_async(_send_to_platform(platform, pconfig, chat_id, message, thread_id=thread_id))
+        from tools.async_utils import run_async
+        result = run_async(_send_to_platform(platform, pconfig, chat_id, message, thread_id=thread_id))
         if used_home_channel and isinstance(result, dict) and result.get("success"):
             result["note"] = f"Sent to {platform_name} home channel (chat_id: {chat_id})"
 
