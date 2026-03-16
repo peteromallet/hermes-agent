@@ -9,11 +9,70 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
+import numpy as np
 from PIL import Image
 
 from demo.camera import CameraKeyframe, interpolate_keyframes
+
+
+def _parse_hex_color(hex_str: str) -> Tuple[int, int, int]:
+    """Parse '#rrggbb' to (r, g, b)."""
+    hex_str = hex_str.lstrip("#")
+    return (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
+
+
+def _load_background(
+    bg_image: Optional[str],
+    bg_color: Optional[str],
+    bg_opacity: float,
+    width: int,
+    height: int,
+) -> Optional[Image.Image]:
+    """Build the background layer: image with color overlay at bg_opacity.
+
+    bg_opacity controls how much the color covers the image.
+    0.9 = 90% color, 10% image (image barely visible).
+    """
+    if not bg_image and not bg_color:
+        return None
+
+    color = _parse_hex_color(bg_color) if bg_color else (0, 0, 0)
+
+    if bg_image:
+        img = Image.open(bg_image).convert("RGB")
+        img = img.resize((width, height), Image.LANCZOS)
+        # Blend: color at bg_opacity over the image
+        img_arr = np.array(img, dtype=np.float32)
+        color_arr = np.array(color, dtype=np.float32)
+        blended = img_arr * (1.0 - bg_opacity) + color_arr * bg_opacity
+        return Image.fromarray(blended.clip(0, 255).astype(np.uint8))
+    else:
+        return Image.new("RGB", (width, height), color)
+
+
+def _blend_over_background(
+    frame: Image.Image,
+    bg: Image.Image,
+    theme_bg_color: Tuple[int, int, int] = (255, 255, 255),
+) -> Image.Image:
+    """Replace terminal background pixels with the composited background.
+
+    Detects terminal background color and swaps those pixels for the bg layer.
+    Text/content pixels are kept as-is.
+    """
+    fg = np.array(frame, dtype=np.float32)
+    bg_arr = np.array(bg.resize(frame.size, Image.LANCZOS), dtype=np.float32)
+
+    # Mask: pixels close to the terminal theme background
+    r, g, b = theme_bg_color
+    diff = np.abs(fg - np.array([r, g, b], dtype=np.float32))
+    is_bg = np.all(diff < 30, axis=2)[..., np.newaxis]
+
+    # Swap: bg pixels → composited background, content pixels → keep
+    blended = np.where(is_bg, bg_arr, fg)
+    return Image.fromarray(blended.clip(0, 255).astype(np.uint8))
 
 
 def composite_frames(
@@ -23,6 +82,9 @@ def composite_frames(
     output_w: int,
     output_h: int,
     fps: int = 30,
+    bg_image: Optional[str] = None,
+    bg_opacity: float = 1.0,
+    bg_color: Optional[str] = None,
 ) -> None:
     """Read GIF frames, apply camera crop per-frame, encode to MP4.
 
@@ -54,7 +116,12 @@ def composite_frames(
         stderr=subprocess.PIPE,
     )
 
-    _process_gif(proc, gif_path, keyframes, output_w, output_h, fps)
+    # Load background at GIF resolution so it zooms with the terminal
+    gif_probe = Image.open(gif_path)
+    gif_w, gif_h = gif_probe.size
+    gif_probe.close()
+    bg = _load_background(bg_image, bg_color, bg_opacity, gif_w, gif_h)
+    _process_gif(proc, gif_path, keyframes, output_w, output_h, fps, bg)
     proc.stdin.close()
     proc.wait()
 
@@ -73,6 +140,7 @@ def _process_gif(
     output_w: int,
     output_h: int,
     fps: int,
+    bg: Optional[Image.Image] = None,
 ) -> None:
     """Iterate GIF frames, crop, and write to ffmpeg stdin."""
     img = Image.open(gif_path)
@@ -81,6 +149,10 @@ def _process_gif(
     while True:
         frame = img.copy().convert("RGB")
         duration_ms = img.info.get("duration", 33)  # fallback ~30fps
+
+        # Blend over background before camera crop so bg zooms with terminal
+        if bg is not None:
+            frame = _blend_over_background(frame, bg)
 
         # Apply camera: interpolate keyframes at this timestamp
         zoom, cx, cy = interpolate_keyframes(keyframes, t)

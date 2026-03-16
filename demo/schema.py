@@ -94,6 +94,9 @@ class OutputConfig(BaseModel):
     font_size: int = 22
     font_family: str = "Menlo"
     theme: str = "github-light"
+    bg_image: Optional[str] = None       # Path to background image
+    bg_opacity: float = 1.0              # Terminal opacity (0.0–1.0) over background
+    bg_color: Optional[str] = None       # Background fill color (hex, e.g. "#fdf1de")
 
 
 # ── Top-level screenplay ───────────────────────────────────────────────

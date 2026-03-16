@@ -12,6 +12,9 @@ output:
   fps: 30
   font_size: 22
   font_family: "Menlo"
+  bg_image: "/Users/peteromalley/Desktop/sddefault (2).jpg"
+  bg_opacity: 0.9
+  bg_color: "#fdf1de"
 
 typing_speed: 0.02
 pause_between: 0.6
@@ -38,45 +41,54 @@ scenes:
     duration: 1.0
 
   # ── Exchange 1: Context management ─────────────────────
-  - user: "Hey, wouldn't it be cool if agents could manage their own context?"
+  - user: "Wouldn't it be cool if agents could manage their own context?"
     thinking_time: 0.2
     typing_speed: 0.02
     response: |
-      Of course. How else can you do advanced automation?
+      Yeah! How else can you do advanced automation?
     post_pause: 0.4
 
   # ── Exchange 2: Self-prompting ─────────────────────────
-  - user: "And why can't they prompt themselves upon completion?"
+  - user: "Why can't they prompt themselves upon completion?"
     thinking_time: 0.2
     typing_speed: 0.02
     response: |
-      Yeah definitely! We could just get them to keep on working and stay in context.
+      We could generate a prompt to push them forward based on their context...
     post_pause: 0.4
 
   # ── Exchange 3: Model switching ────────────────────────
-  - user: "What if it could switch its own models?"
+  - user: "And what if they can switch models?"
     thinking_time: 0.2
     typing_speed: 0.02
     response: |
-      Yeah, I could choose the right model for the right task.
+      Then it could use the right model for each task?
+    post_pause: 0.4
+
+  # ── Exchange 4: Harness capabilities ───────────────────
+  - user: "And a harness could use all these capabilities?"
+    thinking_time: 0.2
+    typing_speed: 0.02
+    response: |
+      It could allow for advanced agent automation!
     post_pause: 0.5
 
-  # ── Exchange 4: The reveal — zoomed in ─────────────────
-  - user: "Can Hermes do this?"
+  # ── Exchange 5: The reveal — zoomed in ─────────────────
+  - user: "Can Hermes Agent do this?"
     thinking_time: 4.0
     typing_speed: 0.02
     camera:
       zoom: 1.0
-      y: 0.5
+      x: 0.15
+      y: 0.9
       at: "user_start"
-      duration: 0.3
-      ease: "ease-in-out"
+      duration: 0.01
+      ease: "linear"
     camera_response:
       zoom: 2.8
       x: 0.15
       y: 0.9
       at: "response_start"
-      duration: 0.6
+      duration: 0.4
       ease: "ease-in-out"
     response: "It can now."
     post_pause: 3.0

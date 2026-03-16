@@ -98,6 +98,9 @@ def run_pipeline(
         output_w=out.final_width,
         output_h=out.final_height,
         fps=out.fps,
+        bg_image=out.bg_image,
+        bg_opacity=out.bg_opacity,
+        bg_color=out.bg_color,
     )
 
     print(f"Done! Output: {output_path}")
