@@ -359,7 +359,7 @@ allowed-tools: Bash(desloppify *)
 ---
 
 <!-- desloppify-begin -->
-<!-- desloppify-skill-version: 5 -->
+<!-- desloppify-skill-version: 6 -->
 
 # Desloppify
 
