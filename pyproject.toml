@@ -21,7 +21,6 @@ dependencies = [
   "tenacity",
   "pyyaml",
   "requests",
-  "jinja2",
   "pydantic>=2.0",
   # Interactive CLI (prompt_toolkit is used directly by cli.py)
   "prompt_toolkit",
@@ -30,10 +29,6 @@ dependencies = [
   "fal-client",
   # Text-to-speech (Edge TTS is free, no API key needed)
   "edge-tts",
-  # mini-swe-agent deps (terminal tool)
-  "litellm>=1.75.5",
-  "typer",
-  "platformdirs",
   # Skills Hub (GitHub App JWT auth — optional, only needed for bot identity)
   "PyJWT[crypto]",
 ]
@@ -47,6 +42,7 @@ cron = ["croniter"]
 slack = ["slack-bolt>=1.18.0", "slack-sdk>=3.27.0"]
 cli = ["simple-term-menu"]
 tts-premium = ["elevenlabs"]
+mini-swe = ["litellm>=1.75.5", "typer", "platformdirs"]
 pty = [
   "ptyprocess>=0.7.0; sys_platform != 'win32'",
   "pywinpty>=2.0.0; sys_platform == 'win32'",
@@ -69,6 +65,7 @@ all = [
   "hermes-agent[cron]",
   "hermes-agent[cli]",
   "hermes-agent[dev]",
+  "hermes-agent[mini-swe]",
   "hermes-agent[tts-premium]",
   "hermes-agent[slack]",
   "hermes-agent[pty]",
