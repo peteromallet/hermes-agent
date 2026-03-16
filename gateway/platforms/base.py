@@ -280,7 +280,7 @@ class MessageEvent:
     message_type: MessageType = MessageType.TEXT
     
     # Source information
-    source: SessionSource = None
+    source: Optional[SessionSource] = None
     
     # Original platform data
     raw_message: Any = None
