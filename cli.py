@@ -1463,7 +1463,7 @@ class HermesCLI:
 
     def _start_control_api(self):
         """Start the control API in a background thread for external model switching."""
-        if not os.getenv("HERMES_CONTROL_API", "").lower() in ("1", "true", "yes"):
+        if os.getenv("HERMES_CONTROL_API", "").lower() not in ("1", "true", "yes"):
             return
         try:
             import asyncio as _aio
@@ -1509,6 +1509,9 @@ class HermesCLI:
 
             t = threading.Thread(target=_run, daemon=True, name="control-api")
             t.start()
+            # Clean up port file on exit (daemon thread won't call api.stop())
+            import atexit
+            atexit.register(ControlAPI._remove_port_file)
             # Give it a moment to bind
             import time
             time.sleep(0.3)
@@ -3221,8 +3224,8 @@ class HermesCLI:
             self._autoreply_config = new_config
             mode = "literal mode " if new_config.get("literal") else ""
             label = "Message" if new_config.get("literal") else "Prompt"
-            prompt_preview = new_config["prompt"][:80]
-            if len(new_config["prompt"]) > 80:
+            prompt_preview = new_config["prompt"][:100]
+            if len(new_config["prompt"]) > 100:
                 prompt_preview += "..."
             limit = "forever" if new_config["max_turns"] == 0 else f"max {new_config['max_turns']} turns"
             _cprint(f"🔄 Auto-reply enabled — {mode}({limit}).")
@@ -3258,8 +3261,15 @@ class HermesCLI:
         if config.get("model"):
             call_kwargs["model"] = config["model"]
 
-        response = call_llm(**call_kwargs)
-        reply_text = response.choices[0].message.content.strip()
+        try:
+            response = call_llm(**call_kwargs)
+            content = response.choices[0].message.content
+            if not content:
+                return None
+            reply_text = content.strip()
+        except Exception as e:
+            _cprint(f"\n{_DIM}[Auto-reply LLM error: {e}]{_RST}")
+            return None
         config["turn_count"] += 1
         return reply_text
 
@@ -4624,6 +4634,10 @@ class HermesCLI:
                             if self._clarify_state or self._clarify_freetext:
                                 continue
                             print(f"\n⚡ New message detected, interrupting...")
+                            # User interrupt clears autoreply loop
+                            if self._autoreply_config:
+                                self._autoreply_config = None
+                                _cprint(f"{_DIM}🔇 Auto-reply disabled by interrupt.{_RST}")
                             # Signal TTS to stop on interrupt
                             if stop_event is not None:
                                 stop_event.set()

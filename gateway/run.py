@@ -2574,7 +2574,10 @@ class GatewayRunner:
             call_kwargs["model"] = config["model"]
 
         response = await async_call_llm(**call_kwargs)
-        reply_text = response.choices[0].message.content.strip()
+        content = response.choices[0].message.content
+        if not content:
+            return None, False
+        reply_text = content.strip()
         config["turn_count"] += 1
         return reply_text, False
 
@@ -2598,6 +2601,10 @@ class GatewayRunner:
                     )
                 return
 
+            # Re-check: user may have disabled autoreply while LLM was running
+            if session_key not in self._autoreply_configs:
+                return
+
             synthetic_event = MessageEvent(
                 text=autoreply_text,
                 source=source,
@@ -2607,7 +2614,6 @@ class GatewayRunner:
         except Exception as e:
             logger.error("[AutoReply] Failed: %s", e)
             try:
-                adapter = self.adapters.get(source.platform)
                 if adapter:
                     metadata = {"thread_id": source.thread_id} if source.thread_id else None
                     await adapter.send(

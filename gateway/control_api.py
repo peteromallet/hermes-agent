@@ -74,6 +74,7 @@ class ControlAPI:
         self.app = web.Application(middlewares=[self._require_header])
         self._setup_routes()
         self._site = None
+        self._app_runner = None
 
     @web.middleware
     async def _require_header(self, request: web.Request, handler):
@@ -194,9 +195,9 @@ class ControlAPI:
 
     async def start(self):
         port = _get_port()
-        app_runner = web.AppRunner(self.app, access_log=None)
-        await app_runner.setup()
-        self._site = web.TCPSite(app_runner, "127.0.0.1", port)
+        self._app_runner = web.AppRunner(self.app, access_log=None)
+        await self._app_runner.setup()
+        self._site = web.TCPSite(self._app_runner, "127.0.0.1", port)
         try:
             await self._site.start()
             logger.info("Control API listening on http://127.0.0.1:%d", port)
@@ -207,8 +208,10 @@ class ControlAPI:
     async def stop(self):
         if self._site:
             await self._site.stop()
-            self._remove_port_file()
-            logger.info("Control API stopped")
+        if self._app_runner:
+            await self._app_runner.cleanup()
+        self._remove_port_file()
+        logger.info("Control API stopped")
 
     @staticmethod
     def _write_port_file(port: int):
