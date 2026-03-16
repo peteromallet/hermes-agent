@@ -10,14 +10,10 @@ _DEFAULT_MAX_TURNS = 20
 
 
 def parse_autoreply_args(args: str) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """Parse /autoreply command arguments.
+    """Parse /autoreply arguments into (action, config_or_none).
 
-    Returns (status_message, config_or_none).
-    - When enabling: returns (message, new_config_dict)
-    - When disabling/status/error: returns (message, None)
-
-    The caller is responsible for storing/clearing the config and
-    formatting the message for their platform (markdown vs plain text).
+    Actions: "off", "max:N", "error:msg", "status", "enabled".
+    Used internally by handle_command(); prefer that for full dispatch.
     """
     # /autoreply off
     if args.lower() in ("off", "disable", "stop"):
@@ -129,21 +125,12 @@ def build_autoreply_messages(config: Dict[str, Any],
 
 
 def check_and_advance(config: Dict[str, Any]) -> Tuple[Optional[str], bool]:
-    """Check turn cap and handle literal mode.
+    """Check turn cap and return literal text if applicable.
 
-    Returns (reply_text, cap_reached).
-    - (None, False): config is None / not applicable (caller didn't pass config)
-    - (None, True): turn cap reached, config should be removed
-    - (text, False): literal mode reply, turn_count incremented
-    - None for LLM mode: caller should proceed to call the LLM
-
-    For LLM mode, returns a sentinel to indicate the caller should proceed:
-    the return is (None, False) when turn_count < max_turns and not literal.
-    But we can't distinguish "no config" from "LLM needed" with just (None, False).
-
-    So the contract is: caller checks config existence first, then calls this.
-    If this returns (None, True) → cap reached. If it returns a string → use it.
-    If it returns (None, False) → proceed to LLM call.
+    Returns (reply_text, cap_reached):
+    - (None, True)  — cap hit, caller should remove config
+    - (text, False)  — literal mode reply
+    - (None, False) — caller should proceed to LLM call
     """
     if config["max_turns"] > 0 and config["turn_count"] >= config["max_turns"]:
         return None, True
@@ -167,3 +154,50 @@ def format_status(config: Dict[str, Any]) -> str:
         f"  {label}: {prompt_preview}\n"
         f"  Turns: {config['turn_count']}/{'∞' if config['max_turns'] == 0 else config['max_turns']}"
     )
+
+
+def handle_command(
+    args: str, current_config: Optional[Dict[str, Any]]
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Handle /autoreply command — full dispatch.
+
+    Returns (display_text, new_config).
+    - new_config is None when autoreply should be disabled/inactive.
+    - new_config is the (possibly mutated) config when active.
+    - display_text is ready to show to the user.
+    """
+    action, new_config = parse_autoreply_args(args)
+
+    if action == "off":
+        if current_config:
+            return "🔇 Auto-reply disabled.", None
+        return "Auto-reply is not active.", None
+
+    if action.startswith("max:"):
+        n = int(action.split(":")[1])
+        if current_config:
+            current_config["max_turns"] = n
+            return f"🔄 Auto-reply max turns set to {n}.", current_config
+        return "Auto-reply is not active. Use /autoreply <instructions> first.", None
+
+    if action.startswith("error:"):
+        return action[6:], current_config
+
+    if action == "status":
+        if current_config:
+            return "🔄 " + format_status(current_config), current_config
+        return "Auto-reply is not active. Use /autoreply <instructions> to enable.", None
+
+    # action == "enabled"
+    mode = "literal mode " if new_config.get("literal") else ""
+    label = "Message" if new_config.get("literal") else "Prompt"
+    max_t = new_config["max_turns"]
+    prompt_preview = new_config["prompt"][:100]
+    if len(new_config["prompt"]) > 100:
+        prompt_preview += "..."
+    text = (
+        f"🔄 Auto-reply enabled — {mode}({'forever' if max_t == 0 else f'max {max_t} turns'}).\n"
+        f"  {label}: {prompt_preview}\n"
+        f"  Send a message to start the loop. Use /autoreply off to stop."
+    )
+    return text, new_config

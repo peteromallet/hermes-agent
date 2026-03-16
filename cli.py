@@ -3195,42 +3195,11 @@ class HermesCLI:
     
     def _handle_autoreply_command(self, cmd: str):
         """Handle /autoreply — enable, disable, or show auto-reply status."""
-        from agent.autoreply import parse_autoreply_args, format_status
+        from agent.autoreply import handle_command
 
         args = cmd.split(None, 1)[1].strip() if len(cmd.split(None, 1)) > 1 else ""
-        action, new_config = parse_autoreply_args(args)
-
-        if action == "off":
-            if self._autoreply_config:
-                self._autoreply_config = None
-                _cprint("🔇 Auto-reply disabled.")
-            else:
-                _cprint("Auto-reply is not active.")
-        elif action.startswith("max:"):
-            n = int(action.split(":")[1])
-            if self._autoreply_config:
-                self._autoreply_config["max_turns"] = n
-                _cprint(f"🔄 Auto-reply max turns set to {n}.")
-            else:
-                _cprint("Auto-reply is not active. Use /autoreply <instructions> first.")
-        elif action.startswith("error:"):
-            _cprint(action[6:])
-        elif action == "status":
-            if self._autoreply_config:
-                _cprint("🔄 " + format_status(self._autoreply_config))
-            else:
-                _cprint("Auto-reply is not active. Use /autoreply <instructions> to enable.")
-        elif action == "enabled":
-            self._autoreply_config = new_config
-            mode = "literal mode " if new_config.get("literal") else ""
-            label = "Message" if new_config.get("literal") else "Prompt"
-            prompt_preview = new_config["prompt"][:100]
-            if len(new_config["prompt"]) > 100:
-                prompt_preview += "..."
-            limit = "forever" if new_config["max_turns"] == 0 else f"max {new_config['max_turns']} turns"
-            _cprint(f"🔄 Auto-reply enabled — {mode}({limit}).")
-            _cprint(f"  {label}: {prompt_preview}")
-            _cprint("  Send a message to start the loop. Use /autoreply off to stop.")
+        text, self._autoreply_config = handle_command(args, self._autoreply_config)
+        _cprint(text)
 
     def _generate_autoreply_text(self) -> Optional[str]:
         """Generate the next auto-reply text, or None if done."""

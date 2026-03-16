@@ -2495,50 +2495,17 @@ class GatewayRunner:
     # ── Auto-reply ────────────────────────────────────────────────────
 
     async def _handle_autoreply_command(self, event: MessageEvent) -> str:
-        """Handle /autoreply command — enable, disable, or show auto-reply status."""
-        from agent.autoreply import parse_autoreply_args, format_status
+        """Handle /autoreply command - enable, disable, or show auto-reply status."""
+        from agent.autoreply import handle_command
 
-        source = event.source
-        session_key = build_session_key(source)
+        session_key = build_session_key(event.source)
         args = event.get_command_args().strip()
-
-        action, new_config = parse_autoreply_args(args)
-
-        if action == "off":
-            if self._autoreply_configs.pop(session_key, None):
-                return "🔇 Auto-reply disabled."
-            return "Auto-reply is not active."
-
-        if action.startswith("max:"):
-            n = int(action.split(":")[1])
-            cfg = self._autoreply_configs.get(session_key)
-            if cfg:
-                cfg["max_turns"] = n
-                return f"🔄 Auto-reply max turns set to **{n}**."
-            return "Auto-reply is not active. Use `/autoreply <instructions>` first."
-
-        if action.startswith("error:"):
-            return action[6:]
-
-        if action == "status":
-            cfg = self._autoreply_configs.get(session_key)
-            if cfg:
-                return "🔄 " + format_status(cfg)
-            return "Auto-reply is not active. Use `/autoreply <instructions>` to enable."
-
-        # action == "enabled"
-        self._autoreply_configs[session_key] = new_config
-        mode = "literal mode " if new_config.get("literal") else ""
-        label = "Message" if new_config.get("literal") else "Prompt"
-        max_t = new_config["max_turns"]
-        prompt_preview = new_config["prompt"][:100]
-        if len(new_config["prompt"]) > 100:
-            prompt_preview += "..."
-        return (
-            f"🔄 Auto-reply enabled — {mode}({'forever' if max_t == 0 else f'max {max_t} turns'}).\n"
-            f"**{label}:** {prompt_preview}\n\n"
-            f"_Send a message to start the loop. Use `/autoreply off` to stop._"
-        )
+        text, new_config = handle_command(args, self._autoreply_configs.get(session_key))
+        if new_config is None:
+            self._autoreply_configs.pop(session_key, None)
+        else:
+            self._autoreply_configs[session_key] = new_config
+        return text
 
     async def _generate_autoreply(self, session_key: str, session_id: str):
         """Generate an auto-reply using the auxiliary LLM client.
