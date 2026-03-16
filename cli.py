@@ -960,6 +960,36 @@ def save_config_value(key_path: str, value: any) -> bool:
 
 
 # ============================================================================
+# _CLIRunner — lightweight shim so ControlAPI can talk to the CLI
+# ============================================================================
+
+
+class _CLIRunner:
+    """Adapter between ControlAPI and HermesCLI.
+
+    Exposes the same interface that ControlAPI expects from GatewayRunner,
+    bridging the sync/single-session CLI with the async ControlAPI server.
+    """
+
+    def __init__(self, agent, session_id, cli_instance):
+        self._running_agents = {session_id: agent}
+        self._cli = cli_instance
+
+    def inject_message(self, key: str, text: str, *, interrupt: bool = True):
+        """Inject a message into the CLI's input queues."""
+        if interrupt and self._cli._agent_running:
+            self._cli._interrupt_queue.put(text)
+        else:
+            self._cli._pending_input.put(text)
+
+    def get_session_info(self, key: str) -> dict:
+        """Return session state for the control API."""
+        from agent.autoreply import session_info
+        cfg = getattr(self._cli, "_autoreply_config", None)
+        return session_info(cfg)
+
+
+# ============================================================================
 # HermesCLI Class
 # ============================================================================
 
@@ -1470,51 +1500,27 @@ class HermesCLI:
             import threading
             from gateway.control_api import ControlAPI
 
-            # Lightweight shim so ControlAPI can find our agent
-            class _CLIRunner:
-                def __init__(self, agent, session_id, cli_instance):
-                    self._running_agents = {session_id: agent}
-                    self._cli = cli_instance
-
-                def inject_message(self, key: str, text: str, *, interrupt: bool = True):
-                    """Inject a message into the CLI's input queues."""
-                    if interrupt and self._cli._agent_running:
-                        self._cli._interrupt_queue.put(text)
-                    else:
-                        self._cli._pending_input.put(text)
-
-                def get_session_info(self, key: str) -> dict:
-                    """Return session state for the control API."""
-                    cfg = getattr(self._cli, "_autoreply_config", None)
-                    return {
-                        "autoreply": {
-                            "enabled": cfg is not None,
-                            "prompt": cfg.get("prompt", "") if cfg else None,
-                            "max_turns": cfg.get("max_turns", 0) if cfg else None,
-                            "turn_count": cfg.get("turn_count", 0) if cfg else None,
-                        },
-                    }
-
             shim = _CLIRunner(self.agent, self.session_id, self)
             api = ControlAPI(shim)
+            ready = threading.Event()
 
             def _run():
                 try:
                     loop = _aio.new_event_loop()
                     _aio.set_event_loop(loop)
                     loop.run_until_complete(api.start())
+                    ready.set()
                     loop.run_forever()
                 except Exception as e:
                     logger.error("Control API thread crashed: %s", e)
+                    ready.set()  # Unblock caller even on failure
 
             t = threading.Thread(target=_run, daemon=True, name="control-api")
             t.start()
             # Clean up port file on exit (daemon thread won't call api.stop())
             import atexit
             atexit.register(ControlAPI._remove_port_file)
-            # Give it a moment to bind
-            import time
-            time.sleep(0.3)
+            ready.wait(timeout=5.0)
         except Exception as e:
             logger.debug("Control API failed to start: %s", e)
 
@@ -3203,7 +3209,7 @@ class HermesCLI:
 
     def _generate_autoreply_text(self) -> Optional[str]:
         """Generate the next auto-reply text, or None if done."""
-        from agent.autoreply import check_and_advance, build_autoreply_messages
+        from agent.autoreply import check_and_advance, prepare_llm_call, extract_reply
 
         config = self._autoreply_config
         if not config:
@@ -3220,29 +3226,13 @@ class HermesCLI:
         # LLM-generated: build prompt from conversation history and call sync LLM
         from agent.auxiliary_client import call_llm
 
-        messages = build_autoreply_messages(config, self.conversation_history or [])
-        call_kwargs = {
-            "task": "autoreply",
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 1024,
-        }
-        if config.get("model"):
-            call_kwargs["model"] = config["model"]
-
+        call_kwargs = prepare_llm_call(config, self.conversation_history or [])
         try:
             response = call_llm(**call_kwargs)
-            if not response.choices:
-                return None
-            content = response.choices[0].message.content
-            if not content:
-                return None
-            reply_text = content.strip()
         except Exception as e:
             _cprint(f"\n{_DIM}[Auto-reply LLM error: {e}]{_RST}")
             return None
-        config["turn_count"] += 1
-        return reply_text
+        return extract_reply(config, response)
 
     def _handle_background_command(self, cmd: str):
         """Handle /background <prompt> — run a prompt in a separate background session.
@@ -5930,11 +5920,12 @@ class HermesCLI:
                         _cprint(f"  {_DIM}📎 {n} image{'s' if n > 1 else ''} attached{_RST}")
 
                     # Real user messages reset auto-reply turn counter
-                    if self._autoreply_config and not user_input.startswith("[autoreply]"):
+                    from agent.autoreply import CLI_INPUT_PREFIX
+                    if self._autoreply_config and not user_input.startswith(CLI_INPUT_PREFIX):
                         self._autoreply_config["turn_count"] = 0
                     # Strip the autoreply prefix before sending to agent
-                    if isinstance(user_input, str) and user_input.startswith("[autoreply]"):
-                        user_input = user_input[len("[autoreply]"):]
+                    if isinstance(user_input, str) and user_input.startswith(CLI_INPUT_PREFIX):
+                        user_input = user_input[len(CLI_INPUT_PREFIX):]
 
                     # Regular chat - run agent
                     self._agent_running = True
@@ -5972,7 +5963,10 @@ class HermesCLI:
                                     turn = cfg["turn_count"] if cfg else "?"
                                     max_t = cfg["max_turns"] if cfg else "?"
                                     _cprint(f"\n{_DIM}[Auto-reply {turn}/{max_t}]{_RST}")
-                                    self._pending_input.put(f"[autoreply]{reply}")
+                                    self._pending_input.put(f"{CLI_INPUT_PREFIX}{reply}")
+                                elif self._autoreply_config:
+                                    # LLM returned empty — loop pauses until next message
+                                    _cprint(f"\n{_DIM}[Auto-reply: LLM returned empty response]{_RST}")
                             except Exception as e:
                                 _cprint(f"\n{_DIM}[Auto-reply failed: {e}]{_RST}")
 

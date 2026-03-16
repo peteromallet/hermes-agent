@@ -378,15 +378,9 @@ class GatewayRunner:
 
     def get_session_info(self, key: str) -> dict:
         """Return session state for the control API."""
+        from agent.autoreply import session_info
         cfg = self._autoreply_configs.get(key)
-        return {
-            "autoreply": {
-                "enabled": cfg is not None,
-                "prompt": cfg.get("prompt", "") if cfg else None,
-                "max_turns": cfg.get("max_turns", 0) if cfg else None,
-                "turn_count": cfg.get("turn_count", 0) if cfg else None,
-            },
-        }
+        return session_info(cfg)
 
     async def inject_message(self, key: str, text: str, *, interrupt: bool = True):
         """Inject a synthetic message into a session via its platform adapter.
@@ -1830,7 +1824,8 @@ class GatewayRunner:
 
         # Real user messages reset auto-reply turn counter;
         # auto-reply messages (injected by _process_autoreply) do not.
-        is_autoreply = (event.message_id or "").startswith("autoreply-")
+        from agent.autoreply import GATEWAY_MSG_PREFIX
+        is_autoreply = (event.message_id or "").startswith(GATEWAY_MSG_PREFIX)
         if session_key in self._autoreply_configs and not is_autoreply:
             self._autoreply_configs[session_key]["turn_count"] = 0
 
@@ -2513,7 +2508,7 @@ class GatewayRunner:
         Returns (reply_text, cap_reached).  reply_text is None when
         auto-reply is inactive or the turn cap was just hit.
         """
-        from agent.autoreply import check_and_advance, build_autoreply_messages
+        from agent.autoreply import check_and_advance, prepare_llm_call, extract_reply
 
         config = self._autoreply_configs.get(session_key)
         if not config:
@@ -2528,30 +2523,16 @@ class GatewayRunner:
 
         # LLM-generated: build prompt from transcript and call async LLM
         history = self.session_store.load_transcript(session_id)
-        messages = build_autoreply_messages(config, history)
+        call_kwargs = prepare_llm_call(config, history)
 
         from agent.auxiliary_client import async_call_llm
-        call_kwargs = {
-            "task": "autoreply",
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 1024,
-        }
-        if config.get("model"):
-            call_kwargs["model"] = config["model"]
-
         response = await async_call_llm(**call_kwargs)
-        if not response.choices:
-            return None, False
-        content = response.choices[0].message.content
-        if not content:
-            return None, False
-        reply_text = content.strip()
-        config["turn_count"] += 1
+        reply_text = extract_reply(config, response)
         return reply_text, False
 
     async def _process_autoreply(self, source, session_key: str, session_id: str):
         """Fire-and-forget task: generate an auto-reply and inject it via the adapter."""
+        from agent.autoreply import GATEWAY_MSG_PREFIX
         try:
             adapter = self.adapters.get(source.platform)
             if not adapter:
@@ -2568,6 +2549,11 @@ class GatewayRunner:
                         content="_[Auto-reply limit reached. Use `/autoreply` to re-enable.]_",
                         metadata=metadata,
                     )
+                elif session_key in self._autoreply_configs:
+                    # LLM returned empty — config is still active but this
+                    # turn produced nothing.  Log it; the loop pauses until
+                    # the next real message triggers another attempt.
+                    logger.warning("[AutoReply] LLM returned empty response for %s", session_key)
                 return
 
             # Re-check: user may have disabled autoreply while LLM was running
@@ -2577,7 +2563,7 @@ class GatewayRunner:
             synthetic_event = MessageEvent(
                 text=autoreply_text,
                 source=source,
-                message_id=f"autoreply-{time.time()}",
+                message_id=f"{GATEWAY_MSG_PREFIX}{time.time()}",
             )
             await adapter.handle_message(synthetic_event, interrupt=False)
         except Exception as e:
