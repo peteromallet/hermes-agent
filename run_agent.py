@@ -42,6 +42,9 @@ import fire
 from datetime import datetime
 from pathlib import Path
 
+# Type aliases for discriminators
+ApiMode = Literal["chat_completions", "codex_responses", "anthropic_messages"]
+
 # Load .env from ~/.hermes/.env first, then project root as dev fallback
 from dotenv import load_dotenv
 
@@ -214,7 +217,7 @@ class AIAgent:
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         provider: Optional[str] = None,
-        api_mode: Optional[Literal["chat_completions", "codex_responses", "anthropic_messages"]] = None,
+        api_mode: Optional[ApiMode] = None,
         model: str = "anthropic/claude-opus-4.6",  # OpenRouter format
         max_iterations: int = 90,  # Default tool-calling iterations (shared with subagents)
         tool_delay: float = 1.0,
